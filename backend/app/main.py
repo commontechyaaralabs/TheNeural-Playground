@@ -29,7 +29,7 @@ app = FastAPI(
 # Define allowed origins for CORS
 origins = [
     "https://playground-theneural.vercel.app",   # Vercel Frontend
-    "https://scratch-editor-107731139870.us-central1.run.app",     # Scratch Editor
+    "https://scratch-editor-uaaur7no2a-uc.a.run.app",     # Scratch Editor
         # Production Frontend
     # Production Frontend
     "https://playgroundai-backend-uaaur7no2a-uc.a.run.app",  # New Backend URL
