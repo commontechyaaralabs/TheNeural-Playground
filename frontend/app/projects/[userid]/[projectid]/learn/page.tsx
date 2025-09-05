@@ -407,6 +407,8 @@ export default function LearnPage() {
             // Check if training is complete
             if (currentJob.status === 'ready' && currentJob.completedAt) {
               // Training completed successfully
+              console.log('🎉 Training completed successfully!');
+              console.log('📊 Job details:', currentJob);
               setIsTraining(false);
               
               const completedModel: TrainedModel = {
@@ -487,13 +489,30 @@ export default function LearnPage() {
 
 
 
-  // Only check training status when necessary, not continuously
+  // Check training status when page loads and poll during training
   useEffect(() => {
     if (actualSessionId && actualProjectId) {
-      // Initial status check only once when page loads
+      // Initial status check when page loads
       fetchTrainingStatus();
+      
+      // Set up polling during training
+      let pollInterval: NodeJS.Timeout | null = null;
+      
+      if (isTraining) {
+        console.log('🔄 Starting training status polling...');
+        pollInterval = setInterval(() => {
+          fetchTrainingStatus();
+        }, 2000); // Poll every 2 seconds during training
+      }
+      
+      return () => {
+        if (pollInterval) {
+          console.log('🛑 Stopping training status polling...');
+          clearInterval(pollInterval);
+        }
+      };
     }
-  }, [actualSessionId, actualProjectId]); // Only depend on session and project IDs, not training state
+  }, [actualSessionId, actualProjectId, isTraining]); // Include isTraining to start/stop polling
 
 
 
@@ -1034,6 +1053,18 @@ export default function LearnPage() {
                      <p className="text-[#dcfc84] text-sm">Checking training status...</p>
                    </div>
                  )}
+                 
+                 {/* Manual refresh button during training */}
+                 {isTraining && !isStatusLoading && (
+                   <div className="text-center pt-2">
+                     <button
+                       onClick={fetchTrainingStatus}
+                       className="text-[#dcfc84] text-sm underline hover:text-white transition-colors"
+                     >
+                       🔄 Refresh Status
+                     </button>
+                   </div>
+                 )}
                 <div className="bg-[#1c1c1c] border border-[#bc6cd3]/20 rounded-lg p-4 max-w-md mx-auto">
                   <div className="space-y-2 text-left">
                     <div className="flex justify-between">
@@ -1046,7 +1077,8 @@ export default function LearnPage() {
                     <div className="flex justify-between">
                       <span className="text-white/70">Progress:</span>
                       <span className="text-[#dcfc84] font-medium">
-                        {currentTrainingJob?.progress ? `${currentTrainingJob.progress}%` : 'Processing examples...'}
+                        {currentTrainingJob?.progress ? `${currentTrainingJob.progress}%` : 
+                         currentTrainingJob?.status === 'running' ? 'Training in progress...' : 'Processing examples...'}
                       </span>
                     </div>
                     <div className="flex justify-between">
