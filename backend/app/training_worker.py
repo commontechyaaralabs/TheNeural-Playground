@@ -24,7 +24,7 @@ class TrainingWorker:
         self.training_job_service = training_job_service
         
         # Worker configuration
-        self.max_concurrent_jobs = 3  # Limit concurrent training jobs
+        self.max_concurrent_jobs = 10  # Increased concurrent training jobs for better throughput
         self.running_jobs = set()
     
     @property

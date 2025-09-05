@@ -40,13 +40,13 @@ gcloud run deploy $SERVICE_NAME `
   --platform managed `
   --allow-unauthenticated `
   --service-account "svc-backend@${PROJECT_ID}.iam.gserviceaccount.com" `
-  --set-env-vars "GOOGLE_CLOUD_PROJECT=$PROJECT_ID,ENVIRONMENT=production,FIRESTORE_DATABASE_ID=(default),GCS_BUCKET_NAME=playgroundai-470111-data,PUBSUB_TOPIC_NAME=train-jobs,CORS_ORIGIN=https://playgroundai-backend-107731139870.us-central1.run.app" `
-  --memory 1Gi `
-  --cpu 1 `
-  --min-instances 0 `
-  --max-instances 10 `
+  --set-env-vars "GOOGLE_CLOUD_PROJECT=$PROJECT_ID,ENVIRONMENT=production,FIRESTORE_DATABASE_ID=(default),GCS_BUCKET_NAME=playgroundai-470111-data,PUBSUB_TOPIC_NAME=train-jobs,CORS_ORIGIN=https://playground-theneural.vercel.app,FIRESTORE_BATCH_SIZE=500,GCS_CHUNK_SIZE=8388608" `
+  --memory 8Gi `
+  --cpu 4 `
+  --max-instances 50 `
   --timeout 1500 `
-  --port 8080
+  --port 8080 `
+  --execution-environment gen2
 
 if ($LASTEXITCODE -ne 0) { throw "Cloud Run deployment failed" }
 

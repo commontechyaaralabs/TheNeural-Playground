@@ -26,11 +26,11 @@ steps:
       - '--set-env-vars'
       - 'GOOGLE_CLOUD_PROJECT=$PROJECT_ID,NODE_ENV=production,FIRESTORE_DATABASE_ID=(default),GCS_BUCKET_NAME=playgroundai-470111-data,PUBSUB_TOPIC_NAME=train-jobs'
       - '--memory'
-      - '1Gi'
+      - '8Gi'
       - '--cpu'
-      - '1'
+      - '4'
       - '--max-instances'
-      - '10'
+      - '50'
 
 images:
   - 'gcr.io/$PROJECT_ID/playgroundai-backend:$COMMIT_SHA'

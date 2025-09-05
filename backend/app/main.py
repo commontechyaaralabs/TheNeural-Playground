@@ -28,12 +28,11 @@ app = FastAPI(
 
 # Define allowed origins for CORS
 origins = [
-    "https://the-neural-playground.vercel.app",   # Vercel Frontend
-    "https://playground-neural-107731139870.us-central1.run.app",   # Frontend
+    "https://playground-theneural.vercel.app",   # Vercel Frontend
     "https://scratch-editor-107731139870.us-central1.run.app",     # Scratch Editor
-    "https://playgroundai-470111.web.app",        # Production Frontend
+        # Production Frontend
     # Production Frontend
-    "https://playgroundai-frontend-773717965404.us-central1.run.app",  # Cloud Run Frontend
+    "https://playgroundai-backend-uaaur7no2a-uc.a.run.app",  # New Backend URL
     "http://localhost:3000",   # Next.js dev server
     "http://localhost:8601",   # Another frontend port if used
 ]
