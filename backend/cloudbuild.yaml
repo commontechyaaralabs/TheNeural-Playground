@@ -1,0 +1,39 @@
+steps:
+  # Build the container image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'gcr.io/$PROJECT_ID/playgroundai-backend:$COMMIT_SHA', '.']
+
+  # Push the container image to Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/playgroundai-backend:$COMMIT_SHA']
+
+  # Deploy container image to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'playgroundai-backend'
+      - '--image'
+      - 'gcr.io/$PROJECT_ID/playgroundai-backend:$COMMIT_SHA'
+      - '--region'
+      - 'us-central1'
+      - '--platform'
+      - 'managed'
+      - '--allow-unauthenticated'
+      - '--service-account'
+      - 'svc-backend@$PROJECT_ID.iam.gserviceaccount.com'
+      - '--set-env-vars'
+      - 'GOOGLE_CLOUD_PROJECT=$PROJECT_ID,NODE_ENV=production,FIRESTORE_DATABASE_ID=(default),GCS_BUCKET_NAME=playgroundai-470111-data,PUBSUB_TOPIC_NAME=train-jobs'
+      - '--memory'
+      - '1Gi'
+      - '--cpu'
+      - '1'
+      - '--max-instances'
+      - '10'
+
+images:
+  - 'gcr.io/$PROJECT_ID/playgroundai-backend:$COMMIT_SHA'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
