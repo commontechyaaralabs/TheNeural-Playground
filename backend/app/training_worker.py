@@ -51,7 +51,7 @@ class TrainingWorker:
     def get_subscription_path(self):
         """Get the subscription path for training jobs"""
         project_id = gcp_clients.get_project_id()
-        subscription_name = "training-worker-subscription"
+        subscription_name = "trainer-sub"  # Use the correct subscription name from GCP
         
         # Return the subscription path - we assume it exists from setup
         subscription_path = self.subscriber_client.subscription_path(project_id, subscription_name)
