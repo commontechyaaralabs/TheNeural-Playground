@@ -185,10 +185,6 @@ export default function ProjectsPage() {
               Get started with machine learning
             </h1>
           
-          {/* Subtitle */}
-          <p className="text-lg md:text-xl text-white mb-12">
-            Try without registering
-          </p>
           
           {/* Try It Now / Go to Projects Button */}
           <button 
