@@ -218,7 +218,7 @@ export default function Home() {
           
           {isCheckingSession && (
             <p className="text-lg text-[#dcfc84] mb-6 max-w-4xl mx-auto">
-              Please wait for few minutes until system gets started
+              Please wait for few minutes for the system to get started...
             </p>
           )}
           
