@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     gcs_chunk_size: int = Field(default=8 * 1024 * 1024, env="GCS_CHUNK_SIZE")  # 8MB chunks
     
     # CORS Configuration
-    cors_origin: str = Field(default="https://playground-theneural.vercel.app", env="CORS_ORIGIN")
+    cors_origin: str = Field(default="https://playground.theneural.in", env="CORS_ORIGIN")
     
     # Security
     jwt_secret: str = Field(default="your-super-secret-jwt-key-here", env="JWT_SECRET")
