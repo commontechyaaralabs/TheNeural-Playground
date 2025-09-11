@@ -14,7 +14,8 @@ import {
   isProjectId
 } from '../../../../../lib/session-utils';
 import { cleanupSessionWithReason, SessionCleanupReason } from '../../../../../lib/session-cleanup';
-import Link from 'next/link'
+import Link from 'next/link';
+import { ImageUpload, ImageGallery } from '../../../../../components/ImageCollection';
 
 interface GuestSession {
   session_id: string;
@@ -77,6 +78,11 @@ export default function TrainPage() {
   const [deletingExamplesByLabel, setDeletingExamplesByLabel] = useState<Set<string>>(new Set());
   const [hasInitialDataLoaded, setHasInitialDataLoaded] = useState(false);
   const [lastDataRefresh, setLastDataRefresh] = useState<number>(0);
+  
+  // Image collection state
+  const [images, setImages] = useState<any[]>([]);
+  const [isUploadingImages, setIsUploadingImages] = useState(false);
+  const [isLoadingImages, setIsLoadingImages] = useState(false);
 
   const params = useParams();
   const urlUserId = params?.userid as string;
@@ -147,6 +153,13 @@ export default function TrainPage() {
       return () => clearTimeout(timer);
     }
   }, [actualSessionId, actualProjectId, isValidSession, hasInitialDataLoaded]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Load images for image-recognition projects
+  useEffect(() => {
+    if (actualSessionId && actualProjectId && isValidSession && selectedProject?.type === 'image-recognition') {
+      loadImages();
+    }
+  }, [actualSessionId, actualProjectId, isValidSession, selectedProject?.type]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const validateGuestSession = async () => {
     if (!urlUserId || !urlProjectId) {
@@ -1047,6 +1060,85 @@ export default function TrainPage() {
     setShowAddExampleModal(true);
   };
 
+  // Image collection functions
+  const loadImages = async () => {
+    if (!actualSessionId || !actualProjectId) return;
+    
+    console.log('🖼️ Loading images for project:', actualProjectId);
+    setIsLoadingImages(true);
+    try {
+      const url = `${config.apiBaseUrl}${config.api.guests.images(actualSessionId, actualProjectId)}`;
+      console.log('🖼️ Fetching images from:', url);
+      
+      const response = await fetch(url);
+      console.log('🖼️ Response status:', response.status);
+      
+      if (response.ok) {
+        const result = await response.json();
+        console.log('🖼️ Images response:', result);
+        setImages(result.images || []);
+        console.log('🖼️ Set images count:', result.images?.length || 0);
+      } else {
+        console.error('Failed to load images:', response.status);
+        const errorText = await response.text();
+        console.error('Error details:', errorText);
+      }
+    } catch (error) {
+      console.error('Error loading images:', error);
+    } finally {
+      setIsLoadingImages(false);
+    }
+  };
+
+  const handleImageUpload = async (files: File[], label: string) => {
+    if (!actualSessionId || !actualProjectId) return;
+    
+    console.log('📤 Uploading images:', files.length, 'files with label:', label);
+    setIsUploadingImages(true);
+    try {
+      const formData = new FormData();
+      files.forEach(file => {
+        formData.append('files', file);
+        console.log('📤 Added file to FormData:', file.name, file.type, file.size);
+      });
+      formData.append('label', label);
+      
+      const url = `${config.apiBaseUrl}${config.api.guests.images(actualSessionId, actualProjectId)}`;
+      console.log('📤 Uploading to:', url);
+      
+      const response = await fetch(url, {
+        method: 'POST',
+        body: formData,
+      });
+      
+      console.log('📤 Upload response status:', response.status);
+      
+      if (response.ok) {
+        const result = await response.json();
+        console.log('📤 Images uploaded successfully:', result);
+        // Reload images to show the new ones
+        await loadImages();
+        // Also refresh labels to update counts
+        await refreshExamplesFromAPI(true);
+      } else {
+        const errorData = await response.json();
+        console.error('📤 Upload failed:', errorData);
+        alert(`Failed to upload images: ${errorData.detail || 'Unknown error'}`);
+      }
+    } catch (error) {
+      console.error('Error uploading images:', error);
+      alert('Network error: Failed to upload images. Please try again.');
+    } finally {
+      setIsUploadingImages(false);
+    }
+  };
+
+  const handleDeleteImage = async (imageUrl: string) => {
+    // For now, just remove from local state
+    // In a full implementation, you'd call a delete API endpoint
+    setImages(prev => prev.filter(img => img.image_url !== imageUrl));
+  };
+
 
 
 
@@ -1111,6 +1203,7 @@ export default function TrainPage() {
               <span className="text-white">Project Type: </span>
               <span className="text-[#dcfc84]">
                 {selectedProject?.type === 'text-recognition' ? 'Text Recognition' : 
+                 selectedProject?.type === 'image-recognition' ? 'Image Recognition' :
                  selectedProject?.type === 'image-recognition-teachable-machine' ? 'Image Recognition - Teachable Machine' :
                  selectedProject?.type === 'classification' ? 'Classification' :
                  selectedProject?.type === 'regression' ? 'Regression' :
@@ -1122,29 +1215,96 @@ export default function TrainPage() {
             <div></div> {/* Empty div to balance the layout */}
           </div>
 
-          {/* Instruction and Button - only show when no labels exist */}
-          {labels.length === 0 && (
-            <div className="flex justify-center items-center gap-4 mb-6">
-              <div className="bg-[#1c1c1c] border border-[#bc6cd3]/20 rounded-lg p-4 max-w-md">
-                <p className="text-white text-sm text-center">
-                  Click on the &lsquo;plus&rsquo; button on the right to add your first label.→
+          {/* Image Collection for Image Recognition Projects */}
+          {selectedProject?.type === 'image-recognition' && (
+            <div className="space-y-8">
+              <div className="bg-[#1c1c1c] border border-[#bc6cd3]/20 rounded-lg p-6">
+                <h2 className="text-xl font-semibold text-white mb-4">Collect Image Data</h2>
+                <p className="text-white/70 mb-6">
+                  Upload images and organize them by labels to train your AI model.
                 </p>
+                
+                <ImageUpload
+                  onUpload={handleImageUpload}
+                  isUploading={isUploadingImages}
+                  projectType={selectedProject.type}
+                />
               </div>
 
-              <button
-                onClick={() => setShowAddLabelModal(true)}
-                className="bg-[#dcfc84] hover:bg-[#dcfc84]/90 text-[#1c1c1c] px-4 py-4 rounded-lg transition-all duration-300 inline-flex items-center gap-2 text-sm font-medium"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-                </svg>
-                Add new label
-              </button>
+              <div className="bg-[#1c1c1c] border border-[#bc6cd3]/20 rounded-lg p-6">
+                <h2 className="text-xl font-semibold text-white mb-4">Your Image Collection</h2>
+                <ImageGallery
+                  images={images}
+                  onDelete={handleDeleteImage}
+                  isLoading={isLoadingImages}
+                  sessionId={actualSessionId}
+                  projectId={actualProjectId}
+                />
+              </div>
+
+              {/* Requirements Note for Images */}
+              <div className="bg-[#1c1c1c] border border-[#bc6cd3]/20 rounded-lg p-4 max-w-lg">
+                <div className="flex items-start gap-3">
+                  <svg className="w-5 h-5 text-[#dcfc84] mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.34 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                  </svg>
+                  <div className="flex-1">
+                    <h3 className="text-[#dcfc84] font-medium mb-2">Note: Before you can proceed to next step</h3>
+                    <div className="text-white text-sm space-y-1">
+                      <div className="flex items-center gap-2">
+                        <strong>1.</strong> Upload images with at least <strong>2 different labels</strong> (e.g., &ldquo;cats&rdquo;, &ldquo;dogs&rdquo;)
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <strong>2.</strong> For each label upload at least <strong>5 images at minimum</strong>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Next Step Button for Images */}
+              {images.length > 0 && (
+                <div className="flex justify-center">
+                  <Link
+                    href={`/projects/${urlUserId}/${urlProjectId}/learn`}
+                    className="bg-[#dcfc84] hover:bg-[#dcfc84]/90 text-[#1c1c1c] px-8 py-3 rounded-lg font-medium transition-all duration-300 inline-flex items-center gap-2"
+                  >
+                    Move to next - Training
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                    </svg>
+                  </Link>
+                </div>
+              )}
             </div>
           )}
 
-          {/* Second Section: Requirements Note */}
-          <div className="relative mb-6">
+          {/* Text Recognition Content - only show for text-recognition projects */}
+          {selectedProject?.type === 'text-recognition' && (
+            <>
+              {/* Instruction and Button - only show when no labels exist */}
+              {labels.length === 0 && (
+                <div className="flex justify-center items-center gap-4 mb-6">
+                  <div className="bg-[#1c1c1c] border border-[#bc6cd3]/20 rounded-lg p-4 max-w-md">
+                    <p className="text-white text-sm text-center">
+                      Click on the &lsquo;plus&rsquo; button on the right to add your first label.→
+                    </p>
+                  </div>
+
+                  <button
+                    onClick={() => setShowAddLabelModal(true)}
+                    className="bg-[#dcfc84] hover:bg-[#dcfc84]/90 text-[#1c1c1c] px-4 py-4 rounded-lg transition-all duration-300 inline-flex items-center gap-2 text-sm font-medium"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                    </svg>
+                    Add new label
+                  </button>
+                </div>
+              )}
+
+              {/* Second Section: Requirements Note */}
+              <div className="relative mb-6">
             <div className="bg-[#1c1c1c] border border-[#bc6cd3]/20 rounded-lg p-4 max-w-lg">
               <div className="flex items-start gap-3">
                 <svg className="w-5 h-5 text-[#dcfc84] mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1367,19 +1527,22 @@ export default function TrainPage() {
                         ) : null}
 
           {/* Next Step Button */}
-          {labels.length >= 2 && labels.every(label => label.examples.length >= 5) && (
-            <div className="flex justify-end mt-12">
-              <Link
-                href={`/projects/${urlUserId}/${urlProjectId}/learn`}
-                className="bg-[#dcfc84] hover:bg-[#dcfc84]/90 text-[#1c1c1c] px-8 py-4 rounded-lg text-lg font-medium hover:scale-105 transition-all duration-300 inline-block shadow-lg hover:shadow-xl"
-              >
-                Move to next - Training
-              </Link>
-            </div>
+      {labels.length >= 2 && labels.every(label => label.examples.length >= 5) && (
+        <div className="flex justify-end mt-12">
+          <Link
+            href={`/projects/${urlUserId}/${urlProjectId}/learn`}
+            className="bg-[#dcfc84] hover:bg-[#dcfc84]/90 text-[#1c1c1c] px-8 py-4 rounded-lg text-lg font-medium hover:scale-105 transition-all duration-300 inline-block shadow-lg hover:shadow-xl"
+          >
+            Move to next - Training
+          </Link>
+        </div>
+      )}
+            </>
           )}
         </div>
       </main>
 
+      {/* Add Label Modal */}
       {showAddLabelModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-[#1c1c1c] border border-[#bc6cd3]/20 rounded-lg max-w-md w-full">
@@ -1388,9 +1551,9 @@ export default function TrainPage() {
             </div>
             
             <div className="p-6">
-                             <label className="block text-sm font-medium text-[#dcfc84] mb-2">
-                 Enter a Label / Class for what you want the AI to classify like &quot;Happy&quot; or &quot;Sad&quot; 
-               </label>
+              <label className="block text-sm font-medium text-[#dcfc84] mb-2">
+                Enter a Label / Class for what you want the AI to classify like "Happy" or "Sad" 
+              </label>
               <input
                 type="text"
                 value={newLabelName}
@@ -1432,6 +1595,7 @@ export default function TrainPage() {
         </div>
       )}
 
+      {/* Add Example Modal */}
       {showAddExampleModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-[#1c1c1c] border border-[#bc6cd3]/20 rounded-lg max-w-lg w-full">
@@ -1441,7 +1605,7 @@ export default function TrainPage() {
             
             <div className="p-6">
               <label className="block text-sm font-medium text-[#dcfc84] mb-2">
-                Enter examples of what you want the AI to recognise as &lsquo;{labels.find(l => l.id === selectedLabelId)?.name}&rsquo;
+                Enter examples of what you want the AI to recognise as '{labels.find(l => l.id === selectedLabelId)?.name}'
               </label>
               <textarea
                 value={newExampleText}

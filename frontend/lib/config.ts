@@ -1,11 +1,11 @@
-// Configuration for the Neural Playground frontend
+// Configuration for the Neural Playground frontend - Updated for local development
 export const config = {
   // Backend API base URL
-  apiBaseUrl: process.env.NEXT_PUBLIC_API_URL || 'https://playgroundai-backend-uaaur7no2a-uc.a.run.app',
+  apiBaseUrl: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080', // Backend running on 8080
   
   // Scratch Editor URLs
   scratchEditor: {
-    gui: process.env.NEXT_PUBLIC_SCRATCH_EDITOR_URL || 'https://scratch-editor-uaaur7no2a-uc.a.run.app',
+    gui: process.env.NEXT_PUBLIC_SCRATCH_EDITOR_URL || 'http://localhost:8601',
     vm: process.env.NEXT_PUBLIC_SCRATCH_VM_URL || 'http://localhost:8602',
   },
   
@@ -17,6 +17,7 @@ export const config = {
       deleteSession: (sessionId: string) => `/api/guests/session/${sessionId}`,
       projectById: (sessionId: string, projectId: string) => `/api/guests/session/${sessionId}/projects/${projectId}`,
       examples: (sessionId: string, projectId: string) => `/api/guests/session/${sessionId}/projects/${projectId}/examples`,
+      images: (sessionId: string, projectId: string) => `/api/guests/session/${sessionId}/projects/${projectId}/images`,
       trainModel: (sessionId: string, projectId: string) => `/api/guests/session/${sessionId}/projects/${projectId}/train`,
       trainingStatus: (sessionId: string, projectId: string) => `/api/guests/session/${sessionId}/projects/${projectId}/train`,
       predict: (sessionId: string, projectId: string) => `/api/guests/session/${sessionId}/projects/${projectId}/predict`,

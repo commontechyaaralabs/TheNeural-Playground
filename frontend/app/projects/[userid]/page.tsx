@@ -216,8 +216,8 @@ function CreateProjectPage() {
           // Load model status for each project in parallel
           const projectsWithStatus = await Promise.all(
             projectsWithMaskedIds.map(async (project) => {
-              // Only fetch model status for text recognition projects
-              if (project.type === 'text-recognition') {
+              // Only fetch model status for text recognition and image recognition projects
+              if (project.type === 'text-recognition' || project.type === 'image-recognition') {
                 const modelStatus = await getProjectModelStatus(project.maskedId || project.id);
                 return {
                   ...project,
@@ -574,7 +574,7 @@ function CreateProjectPage() {
 
   const handleProjectClick = (project: Project) => {
     // For both image recognition and text recognition projects, don't redirect - let the Launch button handle it
-    if (project.type === 'image-recognition-teachable-machine' || project.type === 'text-recognition') {
+    if (project.type === 'image-recognition-teachable-machine' || project.type === 'text-recognition' || project.type === 'image-recognition') {
       return;
     } else {
       // For other project types, navigate to the project-specific page using masked project ID
@@ -594,8 +594,8 @@ function CreateProjectPage() {
         // Optionally, you could open the edit modal here
         // handleEditProject(project);
       }
-    } else if (project.type === 'text-recognition') {
-      // Navigate to the project-specific page for text recognition
+    } else if (project.type === 'text-recognition' || project.type === 'image-recognition') {
+      // Navigate to the project-specific page for text recognition and image recognition
       const projectId = project.maskedId || project.id;
       window.location.href = `/projects/${urlParam}/${projectId}`;
     }
@@ -848,7 +848,7 @@ function CreateProjectPage() {
                   <div
                     key={project.id}
                     className={`bg-[#1c1c1c] border border-[#bc6cd3]/20 rounded-xl p-6 hover:bg-[#bc6cd3]/5 transition-all duration-300 ${
-                      project.type === 'image-recognition-teachable-machine' || project.type === 'text-recognition' ? '' : 'cursor-pointer'
+                      project.type === 'image-recognition-teachable-machine' || project.type === 'text-recognition' || project.type === 'image-recognition' ? '' : 'cursor-pointer'
                     }`}
                     onClick={() => handleProjectClick(project)}
                   >
@@ -912,6 +912,7 @@ function CreateProjectPage() {
                        <span className="text-sm">Project Type: </span>
                        <span className="text-[#dcfc84] font-medium">
                          {project.type === 'text-recognition' ? 'Text Recognition' : 
+                          project.type === 'image-recognition' ? 'Image Recognition' :
                           project.type === 'image-recognition-teachable-machine' ? 'Image Recognition - Teachable Machine' :
                           project.type === 'classification' ? 'Classification' :
                           project.type === 'regression' ? 'Regression' :
@@ -920,8 +921,8 @@ function CreateProjectPage() {
                        </span>
                      </div>
                      
-                     {/* Model Status - Only show for text recognition projects */}
-                     {project.type === 'text-recognition' && (
+                     {/* Model Status - Only show for text recognition and image recognition projects */}
+                     {(project.type === 'text-recognition' || project.type === 'image-recognition') && (
                        <div className="text-white mb-4">
                          <span className="text-sm">Model Trained: </span>
                          <span className={`font-medium ${
@@ -954,9 +955,9 @@ function CreateProjectPage() {
                     )}
                     
                                                               {/* Launch Button and Date Info in Parallel */}
-                     <div className={`mt-4 flex items-start justify-between gap-4 ${project.type === 'text-recognition' ? 'mt-16' : ''}`}>
+                     <div className={`mt-4 flex items-start justify-between gap-4 ${project.type === 'text-recognition' || project.type === 'image-recognition' ? 'mt-16' : ''}`}>
                        {/* Launch Button - For image recognition and text recognition projects */}
-                       {project.type === 'image-recognition-teachable-machine' || project.type === 'text-recognition' ? (
+                       {project.type === 'image-recognition-teachable-machine' || project.type === 'text-recognition' || project.type === 'image-recognition' ? (
                          <button
                            onClick={(e) => {
                              e.stopPropagation();
@@ -1030,6 +1031,9 @@ function CreateProjectPage() {
                     </option>
                     <option value="text-recognition" className="bg-[#1c1c1c] text-white">
                       Text Recognition
+                    </option>
+                    <option value="image-recognition" className="bg-[#1c1c1c] text-white">
+                      Image Recognition
                     </option>
                     <option value="image-recognition-teachable-machine" className="bg-[#1c1c1c] text-white">
                       Image Recognition - Teachable Machine

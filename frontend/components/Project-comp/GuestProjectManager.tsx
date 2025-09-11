@@ -200,6 +200,7 @@ const GuestProjectManager: React.FC<GuestProjectManagerProps> = ({ sessionId }) 
                             className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
                         >
                             <option value="text-recognition">Text Recognition</option>
+                            <option value="image-recognition">Image Recognition</option>
                             <option value="image-recognition-teachable-machine">Image Recognition - Teachable Machine</option>
                             <option value="classification">Classification</option>
                             <option value="regression">Regression</option>
@@ -272,6 +273,7 @@ const GuestProjectManager: React.FC<GuestProjectManagerProps> = ({ sessionId }) 
                                 <div className="flex items-center justify-between mt-3">
                                     <span className="text-xs bg-gray-100 px-2 py-1 rounded">
                                         {project.type === 'text-recognition' ? 'Text Recognition' : 
+                                         project.type === 'image-recognition' ? 'Image Recognition' :
                                          project.type === 'image-recognition-teachable-machine' ? 'Image Recognition - Teachable Machine' :
                                          project.type === 'classification' ? 'Classification' :
                                          project.type === 'regression' ? 'Regression' :

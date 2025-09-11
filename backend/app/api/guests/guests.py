@@ -119,7 +119,7 @@ async def fix_project_types(session_id: str):
         for doc in docs:
             try:
                 data = doc.to_dict()
-                if 'type' in data and data['type'] not in ['text-recognition', 'image-recognition-teachable-machine', 'classification', 'regression', 'custom']:
+                if 'type' in data and data['type'] not in ['text-recognition', 'image-recognition', 'image-recognition-teachable-machine', 'classification', 'regression', 'custom']:
                     # Fix invalid type
                     old_type = data['type']
                     data['type'] = 'text-recognition'  # Default to text-recognition
@@ -335,6 +335,7 @@ async def create_guest_project(
         project_data.student_id = session_id
         
         # For image-recognition-teachable-machine projects, don't save config since they use Teachable Machine
+        # For regular image-recognition projects, use config like text recognition
         if project_data.type == "image-recognition-teachable-machine":
             project_data.config = None
         
@@ -412,7 +413,9 @@ async def update_guest_project(
                 )
             
             # For image-recognition-teachable-machine projects, don't save config
-            project_data.config = None
+            # For regular image-recognition projects, save config like text recognition
+            if project_data.type == "image-recognition-teachable-machine":
+                project_data.config = None
         
         # Update project
         updated_project = await project_service.update_project(project_id, project_data)
@@ -566,6 +569,87 @@ async def add_guest_examples(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/session/{session_id}/projects/{project_id}/images", response_model=dict)
+async def upload_guest_images(
+    session_id: str,
+    project_id: str,
+    files: List[UploadFile] = File(..., description="Image files to upload"),
+    label: str = Form(..., description="Label for these images"),
+    session: dict = Depends(validate_session_dependency),
+    project_service: ProjectService = Depends(get_project_service)
+):
+    """Upload image examples to a guest project"""
+    try:
+        # Verify project belongs to this session
+        project = await project_service.get_project(project_id)
+        if not project or project.student_id != session_id:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        # Validate project type
+        if project.type != "image-recognition":
+            raise HTTPException(
+                status_code=400,
+                detail="Image uploads are only allowed for image-recognition projects"
+            )
+        
+        # Validate number of files
+        if len(files) > 20:
+            raise HTTPException(
+                status_code=400,
+                detail="Maximum 20 images can be uploaded at once"
+            )
+        
+        # Validate file types
+        allowed_types = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp']
+        uploaded_images = []
+        
+        for file in files:
+            if file.content_type not in allowed_types:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid file type: {file.content_type}. Only JPEG, PNG, GIF, and WebP images are allowed."
+                )
+            
+            # Check file size (10MB limit per image)
+            file_content = await file.read()
+            if len(file_content) > 10 * 1024 * 1024:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"File {file.filename} is too large. Maximum size is 10MB per image."
+                )
+            
+            # Upload to GCS
+            gcs_path = f"images/{project_id}/{label}/{file.filename}"
+            blob = project_service.bucket.blob(gcs_path)
+            blob.upload_from_string(file_content, content_type=file.content_type)
+            
+            # Generate public URL
+            image_url = f"gs://{project_service.bucket.name}/{gcs_path}"
+            
+            uploaded_images.append({
+                "image_url": image_url,
+                "label": label,
+                "filename": file.filename,
+                "size": len(file_content),
+                "content_type": file.content_type
+            })
+        
+        # Add image examples to project
+        result = await project_service.add_image_examples(project_id, uploaded_images)
+        
+        return {
+            "success": True,
+            "message": f"Uploaded {len(uploaded_images)} images with label '{label}'",
+            "totalImages": result['totalImages'],
+            "labels": result['labels'],
+            "uploadedImages": len(uploaded_images)
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/session/{session_id}/projects/{project_id}/examples", response_model=dict)
 async def get_guest_examples(
     session_id: str,
@@ -596,6 +680,93 @@ async def get_guest_examples(
     except HTTPException:
         raise
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/session/{session_id}/projects/{project_id}/images", response_model=dict)
+async def get_guest_images(
+    session_id: str,
+    project_id: str,
+    session: dict = Depends(validate_session_dependency),
+    project_service: ProjectService = Depends(get_project_service)
+):
+    """Get all image examples for a guest project"""
+    try:
+        # Verify project belongs to this session
+        project = await project_service.get_project(project_id)
+        if not project or project.student_id != session_id:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        image_examples = await project_service.get_image_examples(project_id)
+        
+        # Also get the labels list from the project
+        labels = []
+        if hasattr(project.dataset, 'labels') and project.dataset.labels:
+            labels = project.dataset.labels
+        
+        return {
+            "success": True,
+            "images": image_examples,
+            "totalImages": len(image_examples),
+            "labels": labels
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/session/{session_id}/projects/{project_id}/images/{image_path:path}")
+async def get_guest_image(
+    session_id: str,
+    project_id: str,
+    image_path: str,
+    session: dict = Depends(validate_session_dependency),
+    project_service: ProjectService = Depends(get_project_service)
+):
+    """Serve individual images from GCS"""
+    try:
+        # Verify project belongs to this session
+        project = await project_service.get_project(project_id)
+        if not project or project.student_id != session_id:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        # Construct the full GCS path
+        gcs_path = f"images/{project_id}/{image_path}"
+        
+        # Get the blob from GCS
+        blob = project_service.bucket.blob(gcs_path)
+        
+        if not blob.exists():
+            raise HTTPException(status_code=404, detail="Image not found")
+        
+        # Download the image content
+        image_content = blob.download_as_bytes()
+        
+        # Determine content type from file extension
+        content_type = "image/jpeg"  # default
+        if image_path.lower().endswith('.png'):
+            content_type = "image/png"
+        elif image_path.lower().endswith('.gif'):
+            content_type = "image/gif"
+        elif image_path.lower().endswith('.webp'):
+            content_type = "image/webp"
+        
+        # Return the image with appropriate headers
+        from fastapi.responses import Response
+        return Response(
+            content=image_content,
+            media_type=content_type,
+            headers={
+                "Cache-Control": "public, max-age=3600",  # Cache for 1 hour
+                "Content-Disposition": f"inline; filename={image_path.split('/')[-1]}"
+            }
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error serving image {image_path}: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1772,7 +1943,7 @@ async def start_scratch_services(
         return {
             "success": True,
             "message": "Scratch services started successfully",
-            "gui_url": "https://scratch-editor-uaaur7no2a-uc.a.run.app",
+            "gui_url": "http://localhost:8601",
             "vm_url": "http://localhost:8602",
             "project_id": project_id,
             "session_id": session_id
@@ -1793,14 +1964,14 @@ async def start_all_scratch_services():
         return {
             "success": True,
             "message": "All Scratch services started successfully",
-            "gui_url": "https://scratch-editor-uaaur7no2a-uc.a.run.app",
+            "gui_url": "http://localhost:8601",
             "vm_url": "http://localhost:8602",
             "services": [
                 {
                     "name": "scratch-gui",
                     "status": "running",
                     "port": 8601,
-                    "url": "https://scratch-editor-uaaur7no2a-uc.a.run.app"
+                    "url": "http://localhost:8601"
                 },
                 {
                     "name": "scratch-vm",

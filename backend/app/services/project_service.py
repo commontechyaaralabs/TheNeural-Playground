@@ -6,7 +6,7 @@ from google.cloud import firestore
 from google.cloud import storage
 from google.cloud import pubsub_v1
 
-from ..models import Project, ProjectCreate, ProjectUpdate, Dataset, TrainedModel, ProjectConfig, TextExample, ExampleAdd
+from ..models import Project, ProjectCreate, ProjectUpdate, Dataset, TrainedModel, ProjectConfig, TextExample, ExampleAdd, ImageExampleAdd
 from ..config import gcp_clients
 
 logger = logging.getLogger(__name__)
@@ -24,7 +24,7 @@ class ProjectService:
     def _deserialize_project_data(self, data: dict) -> dict:
         """Helper method to properly deserialize nested objects from Firestore"""
         # Handle invalid project type enum values
-        if 'type' in data and data['type'] not in ['text-recognition', 'image-recognition-teachable-machine', 'classification', 'regression', 'custom']:
+        if 'type' in data and data['type'] not in ['text-recognition', 'image-recognition', 'image-recognition-teachable-machine', 'classification', 'regression', 'custom']:
             logger.warning(f"Invalid project type '{data['type']}' found, defaulting to 'text-recognition'")
             data['type'] = 'text-recognition'
         
@@ -79,8 +79,9 @@ class ProjectService:
             now = datetime.now(timezone.utc)
             
             # For image-recognition-teachable-machine projects, don't use training config since they use Teachable Machine
+            # For regular image-recognition projects, use training config like text recognition
             config = None
-            if project_data.type != "image-recognition-teachable-machine":
+            if project_data.type not in ["image-recognition-teachable-machine"]:
                 config = project_data.config or ProjectConfig()
             
             project = Project(
@@ -204,6 +205,7 @@ class ProjectService:
                     # Special handling for config field based on project type
                     if field == 'config':
                         # For image-recognition-teachable-machine projects, don't save config
+                        # For regular image-recognition projects, save config like text recognition
                         if update_data.type == "image-recognition-teachable-machine" or (update_data.type is None and project.type == "image-recognition-teachable-machine"):
                             setattr(project, field, None)
                         else:
@@ -385,6 +387,59 @@ class ProjectService:
             return project.dataset.examples
         except Exception as e:
             raise Exception(f"Failed to get examples: {str(e)}")
+    
+    async def add_image_examples(self, project_id: str, image_examples: List[dict]) -> Dict[str, Any]:
+        """Add image examples to a project"""
+        try:
+            # Get project
+            project = await self.get_project(project_id)
+            if not project:
+                raise Exception("Project not found")
+            
+            # Get current image examples count
+            previous_total = len(project.dataset.image_examples)
+            
+            # Add new image examples
+            for image_data in image_examples:
+                image_example = ImageExampleAdd(
+                    image_url=image_data["image_url"],
+                    label=image_data["label"],
+                    filename=image_data["filename"]
+                )
+                project.dataset.image_examples.append(image_example)
+            
+            # Update labels list (combine text and image examples)
+            all_text_labels = set(example.label for example in project.dataset.examples)
+            all_image_labels = set(example.label for example in project.dataset.image_examples)
+            all_labels = all_text_labels.union(all_image_labels)
+            project.dataset.labels = list(all_labels)
+            
+            # Update records count (total examples)
+            project.dataset.records = len(project.dataset.examples) + len(project.dataset.image_examples)
+            
+            # Update Firestore
+            project_dict = project.model_dump()
+            self.collection.document(project_id).set(project_dict)
+            
+            return {
+                'totalImages': len(project.dataset.image_examples),
+                'totalExamples': project.dataset.records,
+                'previousTotal': previous_total,
+                'labels': project.dataset.labels
+            }
+        except Exception as e:
+            raise Exception(f"Failed to add image examples: {str(e)}")
+    
+    async def get_image_examples(self, project_id: str) -> List[ImageExampleAdd]:
+        """Get all image examples for a project"""
+        try:
+            project = await self.get_project(project_id)
+            if not project:
+                raise Exception("Project not found")
+            
+            return project.dataset.image_examples
+        except Exception as e:
+            raise Exception(f"Failed to get image examples: {str(e)}")
     
     async def save_project(self, project: Project) -> Project:
         """Save complete project to Firestore"""

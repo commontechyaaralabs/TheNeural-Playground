@@ -78,7 +78,8 @@ class TeacherDashboardResponse(BaseModel):
 
 class ProjectType(str, Enum):
     TEXT_RECOGNITION = "text-recognition"
-    IMAGE_RECOGNITION = "image-recognition-teachable-machine"
+    IMAGE_RECOGNITION = "image-recognition"
+    IMAGE_RECOGNITION_TEACHABLE_MACHINE = "image-recognition-teachable-machine"
     CLASSIFICATION = "classification"
     REGRESSION = "regression"
     CUSTOM = "custom"
@@ -98,6 +99,11 @@ class TextExample(BaseModel):
     label: str = Field(..., description="Label for this example")
     addedAt: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
+class ImageExampleAdd(BaseModel):
+    image_url: str = Field(..., description="GCS URL of the uploaded image")
+    label: str = Field(..., description="Label for this image example")
+    filename: str = Field(..., description="Original filename of the image")
+
 class Dataset(BaseModel):
     filename: str = Field("", description="Name of the dataset file")
     size: int = Field(0, description="File size in bytes")
@@ -105,6 +111,7 @@ class Dataset(BaseModel):
     uploadedAt: Optional[datetime] = Field(None, description="When the dataset was uploaded")
     gcsPath: str = Field("", description="GCS path to the dataset file")
     examples: List[TextExample] = Field(default_factory=list, description="Text examples")
+    image_examples: List[ImageExampleAdd] = Field(default_factory=list, description="Image examples")
     labels: List[str] = Field(default_factory=list, description="Unique labels in dataset")
 
 
@@ -212,6 +219,9 @@ class ExampleAdd(BaseModel):
 
 class ExamplesBulkAdd(BaseModel):
     examples: List[ExampleAdd] = Field(..., description="List of examples to add")
+
+class ImageExamplesBulkAdd(BaseModel):
+    examples: List[ImageExampleAdd] = Field(..., description="List of image examples to add")
 
 class DatasetUpload(BaseModel):
     records: Optional[int] = Field(None, ge=0)
