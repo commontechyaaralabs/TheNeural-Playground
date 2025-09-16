@@ -1,3 +1,0 @@
-# Testing dependencies for Teacher-Classroom-Student System
-aiohttp>=3.8.0
-asyncio
