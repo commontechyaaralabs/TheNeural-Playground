@@ -2787,7 +2787,7 @@ async def start_scratch_services(
             "success": True,
             "message": "Scratch services started successfully",
             "gui_url": "https://scratch-editor-uaaur7no2a-uc.a.run.app",
-            "vm_url": "http://localhost:8602",
+            "vm_url": "https://scratch-editor-uaaur7no2a-uc.a.run.app",
             "project_id": project_id,
             "session_id": session_id
         }
@@ -2808,7 +2808,7 @@ async def start_all_scratch_services():
             "success": True,
             "message": "All Scratch services started successfully",
             "gui_url": "https://scratch-editor-uaaur7no2a-uc.a.run.app",
-            "vm_url": "http://localhost:8602",
+            "vm_url": "https://scratch-editor-uaaur7no2a-uc.a.run.app",
             "services": [
                 {
                     "name": "scratch-gui",
@@ -2820,7 +2820,7 @@ async def start_all_scratch_services():
                     "name": "scratch-vm",
                     "status": "running", 
                     "port": 8602,
-                    "url": "http://localhost:8602"
+                    "url": "https://scratch-editor-uaaur7no2a-uc.a.run.app"
                 }
             ]
         }

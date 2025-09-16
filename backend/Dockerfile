@@ -1,21 +1,17 @@
-# Alternative approach using Alpine Linux (typically has fewer vulnerabilities)
-FROM python:3.12-alpine3.20
+# Use Ubuntu base for better TensorFlow compatibility
+FROM python:3.12-slim
 
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies (Alpine packages are typically more secure)
-RUN apk update && \
-    apk upgrade && \
-    apk add --no-cache \
+# Install system dependencies
+RUN apt-get update && \
+    apt-get install -y \
         gcc \
         g++ \
-        musl-dev \
-        linux-headers \
-        build-base \
         wget \
-        && rm -rf /var/cache/apk/* \
-        && rm -rf /tmp/*
+        && rm -rf /var/lib/apt/lists/* \
+        && apt-get clean
 
 # Copy requirements first for better caching
 COPY requirements.txt requirements.txt
@@ -32,9 +28,9 @@ RUN python -m spacy download en_core_web_sm
 # Copy application code
 COPY . .
 
-# Create non-root user (Alpine style)
-RUN addgroup -g 1001 -S appgroup && \
-    adduser -u 1001 -S appuser -G appgroup -s /bin/false && \
+# Create non-root user (Ubuntu style)
+RUN groupadd -g 1001 appgroup && \
+    useradd -u 1001 -g appgroup -s /bin/false -m appuser && \
     chown -R appuser:appgroup /app && \
     chmod -R 755 /app
 
