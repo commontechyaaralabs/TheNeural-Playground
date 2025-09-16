@@ -40,6 +40,19 @@ class ProjectService:
                         examples.append(example_data)
                 data['dataset']['examples'] = examples
             
+            # Convert image_examples from dicts to ImageExampleAdd objects
+            if 'image_examples' in data['dataset'] and isinstance(data['dataset']['image_examples'], list):
+                image_examples = []
+                for example_data in data['dataset']['image_examples']:
+                    if isinstance(example_data, dict):
+                        image_examples.append(ImageExampleAdd(**example_data))
+                    else:
+                        image_examples.append(example_data)
+                data['dataset']['image_examples'] = image_examples
+            else:
+                # Ensure image_examples field exists for backward compatibility
+                data['dataset']['image_examples'] = []
+            
             # Convert dataset dict to Dataset object
             data['dataset'] = Dataset(**data['dataset'])
         
@@ -360,9 +373,27 @@ class ProjectService:
                     )
                     project.dataset.examples.append(example)
             
-            # Update labels list
-            all_labels = set(example.label for example in project.dataset.examples)
-            project.dataset.labels = list(all_labels)
+            # Update labels list with stable ordering (new labels at top, existing order preserved)
+            existing_labels = project.dataset.labels or []
+            new_labels = [example.label for example in project.dataset.examples]
+            
+            # Create ordered labels: new labels first (in order of appearance), then existing labels
+            ordered_labels = []
+            seen_labels = set()
+            
+            # Add new labels first (in order of appearance in examples)
+            for label in new_labels:
+                if label not in seen_labels:
+                    ordered_labels.append(label)
+                    seen_labels.add(label)
+            
+            # Add existing labels that weren't in new labels (preserving their order)
+            for label in existing_labels:
+                if label not in seen_labels:
+                    ordered_labels.append(label)
+                    seen_labels.add(label)
+            
+            project.dataset.labels = ordered_labels
             project.dataset.records = len(project.dataset.examples)
             
             # Update Firestore
@@ -408,11 +439,36 @@ class ProjectService:
                 )
                 project.dataset.image_examples.append(image_example)
             
-            # Update labels list (combine text and image examples)
-            all_text_labels = set(example.label for example in project.dataset.examples)
-            all_image_labels = set(example.label for example in project.dataset.image_examples)
-            all_labels = all_text_labels.union(all_image_labels)
-            project.dataset.labels = list(all_labels)
+            # Update labels list with stable ordering (new labels at top, existing order preserved)
+            # IMPORTANT: Preserve empty labels even if they have no examples
+            existing_labels = project.dataset.labels or []
+            new_text_labels = [example.label for example in project.dataset.examples]
+            new_image_labels = [example.label for example in project.dataset.image_examples]
+            
+            # Create ordered labels: new labels first (in order of appearance), then existing labels
+            ordered_labels = []
+            seen_labels = set()
+            
+            # Add new image labels first (in order of appearance in examples)
+            for label in new_image_labels:
+                if label not in seen_labels:
+                    ordered_labels.append(label)
+                    seen_labels.add(label)
+            
+            # Add new text labels (in order of appearance in examples)
+            for label in new_text_labels:
+                if label not in seen_labels:
+                    ordered_labels.append(label)
+                    seen_labels.add(label)
+            
+            # Add existing labels that weren't in new labels (preserving their order)
+            # This preserves empty labels even when they have no examples
+            for label in existing_labels:
+                if label not in seen_labels:
+                    ordered_labels.append(label)
+                    seen_labels.add(label)
+            
+            project.dataset.labels = ordered_labels
             
             # Update records count (total examples)
             project.dataset.records = len(project.dataset.examples) + len(project.dataset.image_examples)

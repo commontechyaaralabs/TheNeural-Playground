@@ -13,8 +13,7 @@ import {
   generateMaskedProjectId,
   storeMaskedProjectIdMapping,
   getProjectIdFromMaskedId,
-  isMaskedProjectId,
-  isProjectId
+  isMaskedProjectId
 } from '../../../lib/session-utils';
 import { cleanupSessionWithReason, SessionCleanupReason, updateSessionActivity } from '../../../lib/session-cleanup';
 
@@ -83,6 +82,16 @@ function CreateProjectPage() {
   const [isLoadingProjects, setIsLoadingProjects] = useState(false);
   const [isCreatingProject, setIsCreatingProject] = useState(false);
   const [isUpdatingProject, setIsUpdatingProject] = useState(false);
+  const [urlValidation, setUrlValidation] = useState<{
+    isValidating: boolean;
+    isValid: boolean | null;
+    error: string | null;
+  }>({
+    isValidating: false,
+    isValid: null,
+    error: null
+  });
+  const [validationTimeout, setValidationTimeout] = useState<NodeJS.Timeout | null>(null);
   
 
 
@@ -93,6 +102,15 @@ function CreateProjectPage() {
   useEffect(() => {
     validateGuestSession();
   }, [urlParam]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (validationTimeout) {
+        clearTimeout(validationTimeout);
+      }
+    };
+  }, [validationTimeout]);
 
 
 
@@ -361,6 +379,90 @@ function CreateProjectPage() {
     }
   };
 
+  // Debounced validation function
+  const debouncedValidateUrl = (url: string) => {
+    // Clear existing timeout
+    if (validationTimeout) {
+      clearTimeout(validationTimeout);
+    }
+    
+    // Only validate if there's a URL and it looks like a Teachable Machine URL
+    if (url.trim() && url.includes('teachablemachine.withgoogle.com/models/')) {
+      const timeout = setTimeout(async () => {
+        setUrlValidation({ isValidating: true, isValid: null, error: null });
+        
+        const isValid = await validateTeachableMachineUrl(url);
+        setUrlValidation({ 
+          isValidating: false, 
+          isValid, 
+          error: isValid ? null : 'Invalid Teachable Machine URL. Please enter a valid URL.' 
+        });
+      }, 1000); // 1 second delay
+      
+      setValidationTimeout(timeout);
+    } else if (url.trim()) {
+      // If it's not a Teachable Machine URL format, show error immediately
+      setUrlValidation({ 
+        isValidating: false, 
+        isValid: false, 
+        error: 'Please enter a valid Teachable Machine URL (e.g., https://teachablemachine.withgoogle.com/models/9ofJResGz/)' 
+      });
+    } else {
+      // Empty URL, reset validation
+      setUrlValidation({ isValidating: false, isValid: null, error: null });
+    }
+  };
+
+  // Validate Teachable Machine URL
+  const validateTeachableMachineUrl = async (url: string): Promise<boolean> => {
+    console.log('Validating URL:', url);
+    
+    if (!url || !url.trim()) {
+      console.log('No URL provided');
+      return false;
+    }
+
+    // Normalize URL - add https:// if missing
+    let normalizedUrl = url.trim();
+    if (!normalizedUrl.startsWith('http://') && !normalizedUrl.startsWith('https://')) {
+      normalizedUrl = 'https://' + normalizedUrl;
+    }
+
+    // Check if it's a valid Teachable Machine URL format
+    if (!normalizedUrl.includes('teachablemachine.withgoogle.com/models/')) {
+      console.log('Invalid Teachable Machine URL format - missing teachablemachine.withgoogle.com/models/');
+      return false;
+    }
+
+    // Check if URL has a proper model ID (should have something after /models/)
+    const modelIdMatch = normalizedUrl.match(/teachablemachine\.withgoogle\.com\/models\/([^\/]+)/);
+    if (!modelIdMatch || !modelIdMatch[1] || modelIdMatch[1].length < 3) {
+      console.log('Invalid Teachable Machine URL format - missing or invalid model ID');
+      return false;
+    }
+
+    // Ensure URL ends with /
+    if (!normalizedUrl.endsWith('/')) {
+      normalizedUrl += '/';
+    }
+
+    // Check if model.json exists
+    const modelUrl = normalizedUrl + 'model.json';
+    console.log('Checking model URL:', modelUrl);
+    
+    try {
+      const response = await fetch(modelUrl, { 
+        method: 'HEAD',
+        mode: 'cors'
+      });
+      console.log('Response status:', response.status, 'OK:', response.ok);
+      return response.ok;
+    } catch (error) {
+      console.error('Error validating Teachable Machine URL:', error);
+      return false;
+    }
+  };
+
   const getProjectModelStatus = async (projectId: string): Promise<'available' | 'unavailable'> => {
     try {
       // Get session ID from localStorage
@@ -427,6 +529,8 @@ function CreateProjectPage() {
 
   const handleCreateProject = () => {
     setCurrentSection('new-project');
+    // Reset validation state when creating new project
+    setUrlValidation({ isValidating: false, isValid: null, error: null });
     // Update URL hash
     window.location.hash = '#new-project';
   };
@@ -436,6 +540,8 @@ function CreateProjectPage() {
     setProjectName(project.name);
     setProjectType(project.type);
     setTeachableLink(project.teachable_machine_link || '');
+    // Reset validation state when editing project
+    setUrlValidation({ isValidating: false, isValid: null, error: null });
     setCurrentSection('edit-project');
     // Update URL hash
     window.location.hash = '#edit-project';
@@ -445,6 +551,32 @@ function CreateProjectPage() {
     e.preventDefault();
     if (projectName.trim() && projectType) {
       setIsCreatingProject(true);
+      
+      // Validate Teachable Machine URL if required
+      if (projectType === 'image-recognition-teachable-machine' && teachableLink) {
+        console.log('Validating Teachable Machine URL...');
+        setUrlValidation({ isValidating: true, isValid: null, error: null });
+        
+        const isValid = await validateTeachableMachineUrl(teachableLink);
+        console.log('Validation result:', isValid);
+        
+        if (!isValid) {
+          setUrlValidation({ 
+            isValidating: false, 
+            isValid: false, 
+            error: 'Invalid Teachable Machine URL. Please enter a valid URL.' 
+          });
+          alert('Invalid Teachable Machine URL. Please enter a valid URL.');
+          setIsCreatingProject(false);
+          return;
+        } else {
+          setUrlValidation({ 
+            isValidating: false, 
+            isValid: true, 
+            error: null 
+          });
+        }
+      }
       
       try {
         const newProject = await createGuestProject({
@@ -499,6 +631,32 @@ function CreateProjectPage() {
     e.preventDefault();
     if (projectName.trim() && editingProject) {
       setIsUpdatingProject(true);
+      
+      // Validate Teachable Machine URL if required
+      if (editingProject.type === 'image-recognition-teachable-machine' && teachableLink) {
+        console.log('Validating Teachable Machine URL for update...');
+        setUrlValidation({ isValidating: true, isValid: null, error: null });
+        
+        const isValid = await validateTeachableMachineUrl(teachableLink);
+        console.log('Validation result:', isValid);
+        
+        if (!isValid) {
+          setUrlValidation({ 
+            isValidating: false, 
+            isValid: false, 
+            error: 'Invalid Teachable Machine URL. Please enter a valid URL.' 
+          });
+          alert('Invalid Teachable Machine URL. Please enter a valid URL.');
+          setIsUpdatingProject(false);
+          return;
+        } else {
+          setUrlValidation({ 
+            isValidating: false, 
+            isValid: true, 
+            error: null 
+          });
+        }
+      }
       
       try {
         await updateGuestProject(editingProject.maskedId || editingProject.id, {
@@ -565,12 +723,12 @@ function CreateProjectPage() {
     }
   };
 
-  const handleExportProject = (projectId: string) => {
-    const project = projects.find(p => p.id === projectId);
-    console.log('Exporting project:', project);
-    // Handle export logic here - could be implemented later with API endpoint
-    alert('Export functionality will be available soon!');
-  };
+  // const handleExportProject = (projectId: string) => {
+  //   const project = projects.find(p => p.id === projectId);
+  //   console.log('Exporting project:', project);
+  //   // Handle export logic here - could be implemented later with API endpoint
+  //   alert('Export functionality will be available soon!');
+  // };
 
   const handleProjectClick = (project: Project) => {
     // For both image recognition and text recognition projects, don't redirect - let the Launch button handle it
@@ -612,6 +770,8 @@ function CreateProjectPage() {
     setProjectType('');
     setTeachableLink('');
     setEditingProject(null);
+    // Reset validation state when canceling
+    setUrlValidation({ isValidating: false, isValid: null, error: null });
     window.location.hash = '';
   };
 
@@ -1051,10 +1211,49 @@ function CreateProjectPage() {
                       type="text"
                       id="teachableLink"
                       value={teachableLink}
-                      onChange={(e) => setTeachableLink(e.target.value)}
-                      placeholder="Enter your Teachable Link"
-                      className="w-full px-4 py-3 bg-[#1c1c1c] border border-[#bc6cd3]/20 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:border-[#dcfc84] focus:ring-1 focus:ring-[#dcfc84] transition-all duration-300"
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        setTeachableLink(value);
+                        debouncedValidateUrl(value);
+                      }}
+                      placeholder="Enter your Teachable Link (e.g., https://teachablemachine.withgoogle.com/models/9ofJResGz/)"
+                      className={`w-full px-4 py-3 bg-[#1c1c1c] border rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-1 transition-all duration-300 ${
+                        teachableLink.trim() && urlValidation.isValid === false 
+                          ? 'border-red-500 focus:border-red-500 focus:ring-red-500' 
+                          : teachableLink.trim() && urlValidation.isValid === true 
+                          ? 'border-green-500 focus:border-green-500 focus:ring-green-500'
+                          : 'border-[#bc6cd3]/20 focus:border-[#dcfc84] focus:ring-[#dcfc84]'
+                      }`}
                     />
+                    
+                    {/* Validation feedback - only show when there's a URL entered */}
+                    {teachableLink.trim() && urlValidation.isValidating && (
+                      <div className="mt-2 text-sm text-blue-400 flex items-center">
+                        <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-blue-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        Validating URL...
+                      </div>
+                    )}
+                    
+                    {teachableLink.trim() && urlValidation.isValid === true && (
+                      <div className="mt-2 text-sm text-green-400 flex items-center">
+                        <svg className="w-4 h-4 mr-1" fill="currentColor" viewBox="0 0 20 20">
+                          <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                        </svg>
+                        Valid Teachable Machine URL
+                      </div>
+                    )}
+                    
+                    {teachableLink.trim() && urlValidation.error && (
+                      <div className="mt-2 text-sm text-red-400 flex items-center">
+                        <svg className="w-4 h-4 mr-1" fill="currentColor" viewBox="0 0 20 20">
+                          <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                        </svg>
+                        {urlValidation.error}
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -1137,10 +1336,49 @@ function CreateProjectPage() {
                       type="text"
                       id="editTeachableLink"
                       value={teachableLink}
-                      onChange={(e) => setTeachableLink(e.target.value)}
-                      placeholder="Enter your Teachable Link"
-                      className="w-full px-4 py-3 bg-[#1c1c1c] border border-[#bc6cd3]/20 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:border-[#dcfc84] focus:ring-1 focus:ring-[#dcfc84] transition-all duration-300"
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        setTeachableLink(value);
+                        debouncedValidateUrl(value);
+                      }}
+                      placeholder="Enter your Teachable Link (e.g., https://teachablemachine.withgoogle.com/models/9ofJResGz/)"
+                      className={`w-full px-4 py-3 bg-[#1c1c1c] border rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-1 transition-all duration-300 ${
+                        teachableLink.trim() && urlValidation.isValid === false 
+                          ? 'border-red-500 focus:border-red-500 focus:ring-red-500' 
+                          : teachableLink.trim() && urlValidation.isValid === true 
+                          ? 'border-green-500 focus:border-green-500 focus:ring-green-500'
+                          : 'border-[#bc6cd3]/20 focus:border-[#dcfc84] focus:ring-[#dcfc84]'
+                      }`}
                     />
+                    
+                    {/* Validation feedback - only show when there's a URL entered */}
+                    {teachableLink.trim() && urlValidation.isValidating && (
+                      <div className="mt-2 text-sm text-blue-400 flex items-center">
+                        <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-blue-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        Validating URL...
+                      </div>
+                    )}
+                    
+                    {teachableLink.trim() && urlValidation.isValid === true && (
+                      <div className="mt-2 text-sm text-green-400 flex items-center">
+                        <svg className="w-4 h-4 mr-1" fill="currentColor" viewBox="0 0 20 20">
+                          <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                        </svg>
+                        Valid Teachable Machine URL
+                      </div>
+                    )}
+                    
+                    {teachableLink.trim() && urlValidation.error && (
+                      <div className="mt-2 text-sm text-red-400 flex items-center">
+                        <svg className="w-4 h-4 mr-1" fill="currentColor" viewBox="0 0 20 20">
+                          <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                        </svg>
+                        {urlValidation.error}
+                      </div>
+                    )}
                   </div>
                 )}
 

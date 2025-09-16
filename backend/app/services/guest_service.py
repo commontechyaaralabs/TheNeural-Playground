@@ -57,6 +57,7 @@ class GuestService:
                     "uploadedAt": None,
                     "gcsPath": "",
                     "examples": [],
+                    "image_examples": [],
                     "labels": []
                 },
                 "datasets": [],
@@ -353,6 +354,7 @@ class GuestService:
                      "uploadedAt": None,
                      "gcsPath": "",
                      "examples": [],
+                     "image_examples": [],
                      "labels": []
                  },
                  "datasets": [],

@@ -47,6 +47,13 @@ interface DatasetExample {
   addedAt: string;
 }
 
+interface ImageExample {
+  image_url: string;
+  label: string;
+  filename: string;
+  addedAt: string;
+}
+
 interface Dataset {
   filename: string;
   size: number;
@@ -54,6 +61,7 @@ interface Dataset {
   uploadedAt: string | null;
   gcsPath: string;
   examples: DatasetExample[];
+  image_examples: ImageExample[];
   labels: string[];
 }
 
@@ -145,9 +153,9 @@ interface PredictionResponse {
 export default function LearnPage() {
   const [guestSession, setGuestSession] = useState<GuestSession | null>(null);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
+  const [projectDataset, setProjectDataset] = useState<Dataset | null>(null);
   const [isValidSession, setIsValidSession] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
-  const [isLoadingProject, setIsLoadingProject] = useState(false);
   const [actualSessionId, setActualSessionId] = useState<string>('');
   const [actualProjectId, setActualProjectId] = useState<string>('');
   const [trainingStats, setTrainingStats] = useState({
@@ -169,6 +177,28 @@ export default function LearnPage() {
     }>;
   } | null>(null);
   const [isTestingModel, setIsTestingModel] = useState(false);
+
+  // Image prediction state
+  const [selectedImage, setSelectedImage] = useState<File | null>(null);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [imageUrl, setImageUrl] = useState<string>('');
+  const [predictionMode, setPredictionMode] = useState<'upload' | 'url' | 'webcam'>('upload');
+  const [imagePredictionResult, setImagePredictionResult] = useState<{
+    predicted_class: string;
+    confidence: number;
+    all_probabilities: Array<{
+      class: string;
+      confidence: number;
+    }>;
+  } | null>(null);
+  const [isPredictingImage, setIsPredictingImage] = useState(false);
+  const [isUploadingImage, setIsUploadingImage] = useState(false);
+  
+  // Webcam state
+  const [webcamStream, setWebcamStream] = useState<MediaStream | null>(null);
+  const [webcamVideoRef, setWebcamVideoRef] = useState<HTMLVideoElement | null>(null);
+  const [isWebcamActive, setIsWebcamActive] = useState(false);
+  const [capturedImage, setCapturedImage] = useState<string | null>(null);
   const [isDeletingModel, setIsDeletingModel] = useState(false);
   const [isStatusLoading, setIsStatusLoading] = useState(false);
   const [isInitializing, setIsInitializing] = useState(true);
@@ -180,6 +210,15 @@ export default function LearnPage() {
   useEffect(() => {
     validateGuestSession();
   }, [urlUserId, urlProjectId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Cleanup webcam on unmount
+  useEffect(() => {
+    return () => {
+      if (webcamStream) {
+        webcamStream.getTracks().forEach(track => track.stop());
+      }
+    };
+  }, [webcamStream]);
 
   const validateGuestSession = async () => {
     if (!urlUserId || !urlProjectId) {
@@ -306,38 +345,106 @@ export default function LearnPage() {
             status: projectData.status
           });
 
+          // Set the dataset
+          setProjectDataset(projectData.dataset);
+
           // Process the dataset to calculate training statistics
-          if (projectData.dataset && projectData.dataset.examples) {
-            const examples = projectData.dataset.examples;
+          if (projectData.dataset) {
+            const textExamples = projectData.dataset.examples || [];
             const labels = projectData.dataset.labels || [];
             
-            console.log('Dataset examples:', examples.length);
+            console.log('Dataset text examples:', textExamples.length);
             console.log('Dataset labels:', labels);
             
             // Group examples by label and count them
             const labelCounts: { [key: string]: number } = {};
-            examples.forEach(example => {
+            
+            // Count text examples
+            textExamples.forEach(example => {
               labelCounts[example.label] = (labelCounts[example.label] || 0) + 1;
             });
             
-            // Create label breakdown for display
-            const labelBreakdown = labels.map(labelName => ({
-              name: labelName,
-              count: labelCounts[labelName] || 0
-            }));
-            
-            // Set training statistics from API data
-        setTrainingStats({
-              totalExamples: examples.length,
-              totalLabels: labels.length,
-              labelBreakdown
-            });
+            // For image recognition projects, also load image data
+            if (projectData.type === 'image-recognition') {
+              try {
+                const imagesResponse = await fetch(`${config.apiBaseUrl}${config.api.guests.images(sessionId, projectId)}`);
+                if (imagesResponse.ok) {
+                  const imagesData = await imagesResponse.json();
+                  console.log('Images data loaded:', imagesData);
+                  
+                  if (imagesData.success) {
+                    const imageExamples = imagesData.images || [];
+                    const imageLabels = imagesData.labels || [];
+                    
+                    console.log('Image examples:', imageExamples.length);
+                    console.log('Image labels:', imageLabels);
+                    
+                    // Count image examples
+                    imageExamples.forEach((example: { label: string }) => {
+                      labelCounts[example.label] = (labelCounts[example.label] || 0) + 1;
+                    });
+                    
+                    // Merge labels from both text and image data
+                    const allLabels = [...new Set([...labels, ...imageLabels])];
+                    
+                    // Create label breakdown for display
+                    const labelBreakdown = allLabels.map(labelName => ({
+                      name: labelName,
+                      count: labelCounts[labelName] || 0
+                    }));
+                    
+                    // Set training statistics from API data (total of text and image examples)
+                    const totalExamples = textExamples.length + imageExamples.length;
+                    setTrainingStats({
+                      totalExamples,
+                      totalLabels: allLabels.length,
+                      labelBreakdown
+                    });
 
-            console.log('Training stats calculated:', {
-              totalExamples: examples.length,
-              totalLabels: labels.length,
-          labelBreakdown
-        });
+                    console.log('Training stats calculated (with images):', {
+                      totalExamples,
+                      totalLabels: allLabels.length,
+                      labelBreakdown
+                    });
+                  } else {
+                    throw new Error('Failed to load image data');
+                  }
+                } else {
+                  throw new Error('Failed to load image data');
+                }
+              } catch (error) {
+                console.error('Error loading image data:', error);
+                // Fall back to text-only data
+                const labelBreakdown = labels.map(labelName => ({
+                  name: labelName,
+                  count: labelCounts[labelName] || 0
+                }));
+                
+                setTrainingStats({
+                  totalExamples: textExamples.length,
+                  totalLabels: labels.length,
+                  labelBreakdown
+                });
+              }
+            } else {
+              // For text recognition projects, use only text data
+              const labelBreakdown = labels.map(labelName => ({
+                name: labelName,
+                count: labelCounts[labelName] || 0
+              }));
+              
+              setTrainingStats({
+                totalExamples: textExamples.length,
+                totalLabels: labels.length,
+                labelBreakdown
+              });
+
+              console.log('Training stats calculated (text only):', {
+                totalExamples: textExamples.length,
+                totalLabels: labels.length,
+                labelBreakdown
+              });
+            }
           } else {
             console.log('No dataset found in project response');
             // Set empty stats if no dataset
@@ -504,7 +611,7 @@ export default function LearnPage() {
     
     if (!canTrainModel) {
       console.log('❌ Training requirements not met');
-      alert(`Cannot train model yet. You need at least 6 examples and 2 labels. Current: ${trainingStats.totalExamples} examples, ${trainingStats.totalLabels} labels`);
+      alert(`Cannot train model yet. You need at least 5 examples and 2 labels. Current: ${trainingStats.totalExamples} examples, ${trainingStats.totalLabels} labels`);
       return;
     }
     
@@ -767,6 +874,9 @@ export default function LearnPage() {
   const handleTestModel = async () => {
     if (!testText.trim() || !trainedModel || !actualSessionId || !actualProjectId) return;
 
+    // Clear any existing test result
+    setTestResult(null);
+
     // Check if model is available for predictions
     if (trainedModel.status !== 'available') {
       console.warn('⚠️ Model not ready for predictions. Model status:', trainedModel.status);
@@ -869,13 +979,257 @@ export default function LearnPage() {
     }
   };
 
+  // Image handling functions
+  const handleImageSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      if (file.type.startsWith('image/')) {
+        setSelectedImage(file);
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          setImagePreview(e.target?.result as string);
+        };
+        reader.readAsDataURL(file);
+      } else {
+        alert('Please select a valid image file.');
+      }
+    }
+  };
+
+  const handleImageDrop = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const file = event.dataTransfer.files[0];
+    if (file && file.type.startsWith('image/')) {
+      setSelectedImage(file);
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        setImagePreview(e.target?.result as string);
+      };
+      reader.readAsDataURL(file);
+    } else {
+      alert('Please drop a valid image file.');
+    }
+  };
+
+  const handleImageDragOver = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+  };
+
+  const clearImage = () => {
+    setSelectedImage(null);
+    setImagePreview(null);
+    setImageUrl('');
+    setCapturedImage(null);
+    setImagePredictionResult(null);
+  };
+
+  // Webcam functions
+  const startWebcam = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        video: { 
+          width: { ideal: 640 },
+          height: { ideal: 480 },
+          facingMode: 'user' // Front camera
+        } 
+      });
+      setWebcamStream(stream);
+      setIsWebcamActive(true);
+      
+      // Set video element source when it's available
+      if (webcamVideoRef) {
+        webcamVideoRef.srcObject = stream;
+      }
+    } catch (error) {
+      console.error('Error accessing webcam:', error);
+      alert('Unable to access webcam. Please check permissions and try again.');
+    }
+  };
+
+  const stopWebcam = () => {
+    if (webcamStream) {
+      webcamStream.getTracks().forEach(track => track.stop());
+      setWebcamStream(null);
+      setIsWebcamActive(false);
+    }
+  };
+
+  const captureImage = () => {
+    if (webcamVideoRef && isWebcamActive) {
+      const canvas = document.createElement('canvas');
+      const context = canvas.getContext('2d');
+      
+      if (context) {
+        // Set canvas dimensions to match video
+        canvas.width = webcamVideoRef.videoWidth;
+        canvas.height = webcamVideoRef.videoHeight;
+        
+        // Draw current video frame to canvas
+        context.drawImage(webcamVideoRef, 0, 0, canvas.width, canvas.height);
+        
+        // Convert canvas to blob and create file
+        canvas.toBlob((blob) => {
+          if (blob) {
+            const file = new File([blob], `webcam_capture_${Date.now()}.jpg`, { type: 'image/jpeg' });
+            setSelectedImage(file);
+            
+            // Create preview URL
+            const previewUrl = URL.createObjectURL(blob);
+            setImagePreview(previewUrl);
+            setCapturedImage(previewUrl);
+            
+            // Stop webcam after capture
+            stopWebcam();
+          }
+        }, 'image/jpeg', 0.8);
+      }
+    }
+  };
+
+  const predictImage = async () => {
+    if (!trainedModel || !actualSessionId || !actualProjectId) return;
+
+    // Clear any existing prediction result
+    setImagePredictionResult(null);
+
+    // Check if model is available for predictions
+    if (trainedModel.status !== 'available') {
+      console.warn('⚠️ Model not ready for predictions. Model status:', trainedModel.status);
+      alert('Model is not ready for predictions yet. Please wait for training to complete.');
+      return;
+    }
+
+    // Validate input based on mode
+    if (predictionMode === 'upload' && !selectedImage) {
+      alert('Please select an image to upload.');
+      return;
+    }
+    if (predictionMode === 'url' && !imageUrl.trim()) {
+      alert('Please enter an image URL.');
+      return;
+    }
+    if (predictionMode === 'webcam' && !selectedImage) {
+      alert('Please capture an image using the webcam.');
+      return;
+    }
+
+    try {
+      setIsUploadingImage(true);
+      setIsPredictingImage(true);
+
+      const predictionLabel = 'prediction';
+      let finalImageUrl: string;
+
+      if (predictionMode === 'upload' || predictionMode === 'webcam') {
+        // Upload file mode for prediction only (does not store in training dataset)
+        console.log(`📤 Uploading image file for prediction only (${predictionMode} mode)...`);
+        
+      const formData = new FormData();
+        formData.append('files', selectedImage!);
+
+      const uploadResponse = await fetch(
+          `${config.apiBaseUrl}/api/guests/session/${actualSessionId}/projects/${actualProjectId}/predict-image`,
+        {
+          method: 'POST',
+          body: formData,
+        }
+      );
+
+      if (!uploadResponse.ok) {
+        const errorText = await uploadResponse.text();
+          console.error('❌ Prediction upload failed:', uploadResponse.status, errorText);
+          throw new Error(`Failed to upload image for prediction: ${uploadResponse.status}`);
+      }
+
+      const uploadData = await uploadResponse.json();
+        console.log('✅ Prediction upload successful:', uploadData);
+        
+        finalImageUrl = uploadData.imageUrl;
+
+        if (!finalImageUrl) {
+          throw new Error('No image URL returned from prediction upload');
+        }
+      } else {
+        // URL mode - use prediction-only API endpoint
+        console.log('📤 Uploading image from URL for prediction only...');
+        
+        const formData = new FormData();
+        formData.append('image_url', imageUrl.trim());
+
+        const uploadResponse = await fetch(
+          `${config.apiBaseUrl}/api/guests/session/${actualSessionId}/projects/${actualProjectId}/predict-image/url`,
+          {
+            method: 'POST',
+            body: formData,
+          }
+        );
+
+        if (!uploadResponse.ok) {
+          const errorText = await uploadResponse.text();
+          console.error('❌ URL prediction upload failed:', uploadResponse.status, errorText);
+          throw new Error(`Failed to upload image from URL for prediction: ${uploadResponse.status}`);
+        }
+
+        const uploadData = await uploadResponse.json();
+        console.log('✅ URL prediction upload successful:', uploadData);
+        
+        finalImageUrl = uploadData.imageUrl;
+
+        if (!finalImageUrl) {
+          throw new Error('No GCS URL returned from URL prediction upload');
+        }
+      }
+
+      console.log('🔮 Making prediction with image URL:', finalImageUrl);
+
+      // Now make prediction with the GCS URL
+      const predictionResponse = await fetch(
+        `${config.apiBaseUrl}/api/guests/session/${actualSessionId}/projects/${actualProjectId}/predict`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            text: finalImageUrl, // For image recognition, we pass the GCS URL as text
+          }),
+        }
+      );
+
+      if (predictionResponse.ok) {
+        const predictionData = await predictionResponse.json();
+        console.log('✅ Prediction successful:', predictionData);
+        if (predictionData.success) {
+          setImagePredictionResult({
+            predicted_class: predictionData.label,
+            confidence: predictionData.confidence,
+            all_probabilities: predictionData.alternatives || []
+          });
+        } else {
+          alert('Prediction failed: ' + predictionData.message);
+        }
+      } else {
+        const errorText = await predictionResponse.text();
+        console.error('❌ Prediction failed:', predictionResponse.status, errorText);
+        throw new Error(`Prediction request failed: ${predictionResponse.status}`);
+      }
+    } catch (error) {
+      console.error('❌ Image prediction failed:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+      alert('Failed to predict image: ' + errorMessage);
+    } finally {
+      setIsUploadingImage(false);
+      setIsPredictingImage(false);
+    }
+  };
+
   const handleDescribeModel = () => {
     // This could open a modal or navigate to a description page
     console.log('Describe model clicked');
   };
 
   // Check if training requirements are met
-  const canTrainModel = trainingStats.totalExamples >= 6 && trainingStats.totalLabels >= 2;
+  const canTrainModel = trainingStats.totalExamples >= 5 && trainingStats.totalLabels >= 2;
 
   if (isLoading || isInitializing) {
     return (
@@ -1076,58 +1430,360 @@ export default function LearnPage() {
                  )}
                                  {/* Model Testing Section */}
                  <div className="bg-[#1c1c1c] border border-[#bc6cd3]/20 rounded-lg p-6">
-                   <h4 className="text-lg font-semibold text-white mb-4">
-                     Try putting in some text to see how it is recognised based on your training.
-                   </h4>
-                  <div className="flex gap-4 items-end mb-4">
-                    <div className="flex-1">
-                      <input
-                        type="text"
-                        value={testText}
-                        onChange={(e) => setTestText(e.target.value)}
-                                                 onKeyDown={(e) => {
-                           if (e.key === 'Enter' && testText.trim() && !isTestingModel) {
-                             e.preventDefault();
-                             handleTestModel();
-                           }
-                         }}
-                                                 placeholder="enter a test text here (Enter to test)"
-                        className="w-full px-4 py-3 bg-[#1c1c1c] border border-[#bc6cd3]/20 rounded-lg text-white placeholder-white/50 focus:outline-none focus:border-[#dcfc84] focus:ring-1 focus:ring-[#dcfc84] transition-all duration-300"
-                      />
-                    </div>
-                                         <button
-                       onClick={handleTestModel}
-                       disabled={!testText.trim() || isTestingModel}
-                       className="bg-[#bc6cd3] hover:bg-[#bc6cd3]/90 disabled:bg-[#1c1c1c] disabled:border disabled:border-[#bc6cd3]/20 disabled:text-white/50 text-white px-6 py-3 rounded-lg font-medium transition-colors duration-300"
-                     >
-                       {isTestingModel ? (
-                         <div className="flex items-center gap-2">
-                           <div className="w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin"></div>
-                           Testing...
+                   {selectedProject?.type === 'image-recognition' ? (
+                     // Image Recognition Interface
+                     <>
+                       <h4 className="text-lg font-semibold text-white mb-4">
+                         Upload an image, provide an image URL, or capture with your webcam to see how it&apos;s classified based on your training.
+                       </h4>
+                       
+                       {/* Mode Selection */}
+                       <div className="mb-6">
+                         <div className="flex gap-4 mb-4 flex-wrap">
+                           <button
+                             onClick={() => {
+                               setPredictionMode('upload');
+                               clearImage();
+                               stopWebcam();
+                             }}
+                             className={`px-4 py-2 rounded-lg font-medium transition-colors duration-300 ${
+                               predictionMode === 'upload'
+                                 ? 'bg-[#dcfc84] text-[#1c1c1c]'
+                                 : 'bg-[#1c1c1c] border border-[#bc6cd3]/20 text-white hover:border-[#bc6cd3]/40'
+                             }`}
+                           >
+                             Upload Image
+                           </button>
+                           <button
+                             onClick={() => {
+                               setPredictionMode('url');
+                               clearImage();
+                               stopWebcam();
+                             }}
+                             className={`px-4 py-2 rounded-lg font-medium transition-colors duration-300 ${
+                               predictionMode === 'url'
+                                 ? 'bg-[#dcfc84] text-[#1c1c1c]'
+                                 : 'bg-[#1c1c1c] border border-[#bc6cd3]/20 text-white hover:border-[#bc6cd3]/40'
+                             }`}
+                           >
+                             Image URL
+                           </button>
+                           <button
+                             onClick={() => {
+                               setPredictionMode('webcam');
+                               clearImage();
+                             }}
+                             className={`px-4 py-2 rounded-lg font-medium transition-colors duration-300 ${
+                               predictionMode === 'webcam'
+                                 ? 'bg-[#dcfc84] text-[#1c1c1c]'
+                                 : 'bg-[#1c1c1c] border border-[#bc6cd3]/20 text-white hover:border-[#bc6cd3]/40'
+                             }`}
+                           >
+                             📷 Webcam
+                           </button>
                          </div>
-                       ) : (
-                         'Test'
-                       )}
-                     </button>
-                  </div>
+                       </div>
+                       
+                       {/* Image Upload/URL Area */}
+                       <div className="mb-6">
+                         {predictionMode === 'upload' ? (
+                           // Upload Mode
+                           !imagePreview ? (
+                           <div
+                             className="border-2 border-dashed border-[#bc6cd3]/30 rounded-lg p-8 text-center hover:border-[#bc6cd3]/50 transition-colors duration-300 cursor-pointer"
+                             onDrop={handleImageDrop}
+                             onDragOver={handleImageDragOver}
+                             onClick={() => document.getElementById('image-upload')?.click()}
+                           >
+                             <div className="space-y-4">
+                               <div className="text-4xl text-[#bc6cd3]/50">📷</div>
+                               <div>
+                                 <p className="text-white font-medium mb-2">Drop an image here or click to browse</p>
+                                 <p className="text-white/70 text-sm">Supports JPG, PNG, GIF, WebP</p>
+                               </div>
+                             </div>
+                             <input
+                               id="image-upload"
+                               type="file"
+                               accept="image/*"
+                               onChange={handleImageSelect}
+                               className="hidden"
+                             />
+                           </div>
+                         ) : (
+                           <div className="space-y-4">
+                             <div className="relative">
+                               <img
+                                 src={imagePreview}
+                                 alt="Preview"
+                                 className="max-w-full max-h-64 mx-auto rounded-lg"
+                               />
+                               <button
+                                 onClick={clearImage}
+                                 className="absolute top-2 right-2 bg-red-500 hover:bg-red-600 text-white rounded-full w-8 h-8 flex items-center justify-center text-sm"
+                               >
+                                 ×
+                               </button>
+                             </div>
+                             <div className="flex gap-4 justify-center">
+                               <button
+                                 onClick={predictImage}
+                                 disabled={isPredictingImage || isUploadingImage}
+                                 className="bg-[#bc6cd3] hover:bg-[#bc6cd3]/90 disabled:bg-[#1c1c1c] disabled:border disabled:border-[#bc6cd3]/20 disabled:text-white/50 text-white px-6 py-3 rounded-lg font-medium transition-colors duration-300"
+                               >
+                                 {isPredictingImage || isUploadingImage ? (
+                                   <div className="flex items-center gap-2">
+                                     <div className="w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin"></div>
+                                     {isUploadingImage ? 'Uploading...' : 'Predicting...'}
+                                   </div>
+                                 ) : (
+                                   'Predict Image'
+                                 )}
+                               </button>
+                               <button
+                                 onClick={clearImage}
+                                 className="bg-[#1c1c1c] border border-[#bc6cd3]/20 hover:border-[#bc6cd3]/40 text-white px-6 py-3 rounded-lg font-medium transition-colors duration-300"
+                               >
+                                 Clear
+                               </button>
+                               </div>
+                             </div>
+                           )
+                         ) : predictionMode === 'url' ? (
+                           // URL Mode
+                           <div className="space-y-4">
+                             <div>
+                               <label className="block text-white font-medium mb-2">
+                                 Enter Image URL:
+                               </label>
+                               <input
+                                 type="url"
+                                 value={imageUrl}
+                                 onChange={(e) => setImageUrl(e.target.value)}
+                                 placeholder="https://example.com/image.jpg"
+                                 className="w-full px-4 py-3 bg-[#1c1c1c] border border-[#bc6cd3]/20 rounded-lg text-white placeholder-white/50 focus:outline-none focus:border-[#dcfc84] focus:ring-1 focus:ring-[#dcfc84] transition-all duration-300"
+                               />
+                               <p className="text-white/70 text-sm mt-2">
+                                 Enter a direct URL to an image (JPG, PNG, GIF, WebP)
+                               </p>
+                             </div>
+                             
+                             {/* Image Preview for URL */}
+                             {imageUrl && (
+                               <div className="space-y-4">
+                                 <div className="relative">
+                                   <img
+                                     src={imageUrl}
+                                     alt="URL Preview"
+                                     className="max-w-full max-h-64 mx-auto rounded-lg"
+                                     onError={(e) => {
+                                       e.currentTarget.style.display = 'none';
+                                     }}
+                                   />
+                             </div>
+                               </div>
+                             )}
+                             
+                             <div className="flex gap-4 justify-center">
+                               <button
+                                 onClick={predictImage}
+                                 disabled={!imageUrl.trim() || isPredictingImage || isUploadingImage}
+                                 className="bg-[#bc6cd3] hover:bg-[#bc6cd3]/90 disabled:bg-[#1c1c1c] disabled:border disabled:border-[#bc6cd3]/20 disabled:text-white/50 text-white px-6 py-3 rounded-lg font-medium transition-colors duration-300"
+                               >
+                                 {isPredictingImage || isUploadingImage ? (
+                                   <div className="flex items-center gap-2">
+                                     <div className="w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin"></div>
+                                     Predicting...
+                                   </div>
+                                 ) : (
+                                   'Predict Image'
+                                 )}
+                               </button>
+                               <button
+                                 onClick={clearImage}
+                                 className="bg-[#1c1c1c] border border-[#bc6cd3]/20 hover:border-[#bc6cd3]/40 text-white px-6 py-3 rounded-lg font-medium transition-colors duration-300"
+                               >
+                                 Clear
+                               </button>
+                             </div>
+                           </div>
+                         ) : (
+                           // Webcam Mode
+                           <div className="space-y-4">
+                             {!isWebcamActive && !capturedImage ? (
+                               // Start webcam button
+                               <div className="text-center">
+                                 <div className="mb-4">
+                                   <div className="text-4xl text-[#bc6cd3]/50 mb-2">📷</div>
+                                   <p className="text-white font-medium mb-2">Capture an image using your webcam</p>
+                                   <p className="text-white/70 text-sm">Click the button below to start your camera</p>
+                                 </div>
+                                 <button
+                                   onClick={startWebcam}
+                                   className="bg-[#dcfc84] hover:bg-[#dcfc84]/90 text-[#1c1c1c] px-6 py-3 rounded-lg font-medium transition-colors duration-300"
+                                 >
+                                   Start Camera
+                                 </button>
+                               </div>
+                             ) : isWebcamActive ? (
+                               // Webcam active - show video and capture button
+                               <div className="space-y-4">
+                                 <div className="relative">
+                                   <video
+                                     ref={(ref) => {
+                                       if (ref) {
+                                         setWebcamVideoRef(ref);
+                                         ref.srcObject = webcamStream;
+                                       }
+                                     }}
+                                     autoPlay
+                                     playsInline
+                                     muted
+                                     className="max-w-full max-h-64 mx-auto rounded-lg"
+                                   />
+                                   <div className="absolute inset-0 border-2 border-[#dcfc84] rounded-lg pointer-events-none"></div>
+                                 </div>
+                                 <div className="flex gap-4 justify-center">
+                                   <button
+                                     onClick={captureImage}
+                                     className="bg-[#dcfc84] hover:bg-[#dcfc84]/90 text-[#1c1c1c] px-6 py-3 rounded-lg font-medium transition-colors duration-300"
+                                   >
+                                     📸 Capture Photo
+                                   </button>
+                                   <button
+                                     onClick={stopWebcam}
+                                     className="bg-[#1c1c1c] border border-[#bc6cd3]/20 hover:border-[#bc6cd3]/40 text-white px-6 py-3 rounded-lg font-medium transition-colors duration-300"
+                                   >
+                                     Cancel
+                                   </button>
+                                 </div>
+                               </div>
+                             ) : (
+                               // Captured image preview
+                               <div className="space-y-4">
+                                 <div className="relative">
+                                   <img
+                                     src={capturedImage || ''}
+                                     alt="Captured"
+                                     className="max-w-full max-h-64 mx-auto rounded-lg"
+                                   />
+                                   <button
+                                     onClick={clearImage}
+                                     className="absolute top-2 right-2 bg-red-500 hover:bg-red-600 text-white rounded-full w-8 h-8 flex items-center justify-center text-sm"
+                                   >
+                                     ×
+                                   </button>
+                                 </div>
+                                 <div className="flex gap-4 justify-center">
+                                   <button
+                                     onClick={predictImage}
+                                     disabled={isPredictingImage || isUploadingImage}
+                                     className="bg-[#bc6cd3] hover:bg-[#bc6cd3]/90 disabled:bg-[#1c1c1c] disabled:border disabled:border-[#bc6cd3]/20 disabled:text-white/50 text-white px-6 py-3 rounded-lg font-medium transition-colors duration-300"
+                                   >
+                                     {isPredictingImage || isUploadingImage ? (
+                                       <div className="flex items-center gap-2">
+                                         <div className="w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin"></div>
+                                         {isUploadingImage ? 'Uploading...' : 'Predicting...'}
+                                       </div>
+                                     ) : (
+                                       'Predict Image'
+                                     )}
+                                   </button>
+                                   <button
+                                     onClick={() => {
+                                       clearImage();
+                                       startWebcam();
+                                     }}
+                                     className="bg-[#1c1c1c] border border-[#bc6cd3]/20 hover:border-[#bc6cd3]/40 text-white px-6 py-3 rounded-lg font-medium transition-colors duration-300"
+                                   >
+                                     Take Another
+                                   </button>
+                                 </div>
+                               </div>
+                             )}
+                           </div>
+                         )}
+                       </div>
 
-                  {/* Test Results */}
-                  {testResult && (
-                    <div className="mt-4">
-                      <h5 className="text-md font-medium text-white mb-3">Test Result:</h5>
-                      <div className="bg-[#bc6cd3]/10 p-4 rounded-lg border border-[#bc6cd3]/20">
-                        <div className="mb-2">
-                          <span className="text-white font-medium">&ldquo;{testResult.text}&rdquo;</span>
-                        </div>
-                        <div className="flex items-center gap-2 mb-2">
-                          <span className="text-white/70">Confidence:</span>
-                              <span className="text-[#dcfc84] font-medium">
-                            {testResult.prediction} ({testResult.confidence.toFixed(1)}%)
-                              </span>
-                        </div>
-                      </div>
-                    </div>
-                  )}
+                       {/* Image Prediction Results */}
+                       {imagePredictionResult && (
+                         <div className="mt-4">
+                           <h5 className="text-md font-medium text-white mb-3">Prediction Result:</h5>
+                           <div className="bg-[#bc6cd3]/10 p-4 rounded-lg border border-[#bc6cd3]/20">
+                             <div className="mb-3">
+                               <span className="text-white font-medium">Predicted Class: </span>
+                               <span className="text-[#dcfc84] font-bold text-lg">
+                                 {imagePredictionResult.predicted_class}
+                               </span>
+                             </div>
+                             <div className="mb-3">
+                               <span className="text-white/70">Confidence: </span>
+                               <span className="text-[#dcfc84] font-medium">
+                                 {imagePredictionResult.confidence.toFixed(1)}%
+                               </span>
+                             </div>
+                             
+                           </div>
+                         </div>
+                       )}
+                     </>
+                   ) : (
+                     // Text Recognition Interface
+                     <>
+                       <h4 className="text-lg font-semibold text-white mb-4">
+                         Try putting in some text to see how it is recognised based on your training.
+                       </h4>
+                       <div className="flex gap-4 items-end mb-4">
+                         <div className="flex-1">
+                           <input
+                             type="text"
+                             value={testText}
+                             onChange={(e) => setTestText(e.target.value)}
+                             onKeyDown={(e) => {
+                               if (e.key === 'Enter' && testText.trim() && !isTestingModel) {
+                                 e.preventDefault();
+                                 handleTestModel();
+                               }
+                             }}
+                             placeholder="enter a test text here (Enter to test)"
+                             className="w-full px-4 py-3 bg-[#1c1c1c] border border-[#bc6cd3]/20 rounded-lg text-white placeholder-white/50 focus:outline-none focus:border-[#dcfc84] focus:ring-1 focus:ring-[#dcfc84] transition-all duration-300"
+                           />
+                         </div>
+                         <button
+                           onClick={handleTestModel}
+                           disabled={!testText.trim() || isTestingModel}
+                           className="bg-[#bc6cd3] hover:bg-[#bc6cd3]/90 disabled:bg-[#1c1c1c] disabled:border disabled:border-[#bc6cd3]/20 disabled:text-white/50 text-white px-6 py-3 rounded-lg font-medium transition-colors duration-300"
+                         >
+                           {isTestingModel ? (
+                             <div className="flex items-center gap-2">
+                               <div className="w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin"></div>
+                               Testing...
+                             </div>
+                           ) : (
+                             'Test'
+                           )}
+                         </button>
+                       </div>
+
+                       {/* Text Test Results */}
+                       {testResult && (
+                         <div className="mt-4">
+                           <h5 className="text-md font-medium text-white mb-3">Test Result:</h5>
+                           <div className="bg-[#bc6cd3]/10 p-4 rounded-lg border border-[#bc6cd3]/20">
+                             <div className="mb-2">
+                               <span className="text-white font-medium">&ldquo;{testResult.text}&rdquo;</span>
+                             </div>
+                             <div className="flex items-center gap-2 mb-2">
+                               <span className="text-white/70">Confidence:</span>
+                               <span className="text-[#dcfc84] font-medium">
+                                 {testResult.prediction} ({testResult.confidence.toFixed(1)}%)
+                               </span>
+                             </div>
+                           </div>
+                         </div>
+                       )}
+                     </>
+                   )}
                 </div>
 
                 {/* Training Results */}
@@ -1264,7 +1920,7 @@ export default function LearnPage() {
                       <div>
                         <h4 className="text-[#dcfc84] font-medium mb-2">⚠ Requirements not met</h4>
                         <p className="text-white text-sm">
-                          You need at least <strong>6 examples</strong> and <strong>2 labels</strong> to train a model.
+                          You need at least <strong>5 examples</strong> and <strong>2 labels</strong> to train a model.
                           <br />
                           Current: {trainingStats.totalExamples} examples, {trainingStats.totalLabels} labels
                         </p>

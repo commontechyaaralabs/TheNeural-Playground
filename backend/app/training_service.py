@@ -316,12 +316,11 @@ class EnhancedLogisticRegressionTrainer:
             self.training_texts = texts[:]
             self.training_labels = labels[:]
             
-            # Split data
-            print("✂️ Splitting data into train/validation sets...")
-            X_train, X_val, y_train, y_val = train_test_split(
-                texts, labels, test_size=0.2, random_state=42, stratify=labels
-            )
-            print(f"✅ Data split complete: {len(X_train)} training, {len(X_val)} validation")
+            # Use all data for training (no validation split as requested)
+            print("📚 Using all data for training (no validation split)...")
+            X_train = texts
+            y_train = labels
+            print(f"✅ Training data ready: {len(X_train)} examples")
             
             # Find best hyperparameters
             print("🔍 Finding best hyperparameters...")
@@ -344,11 +343,11 @@ class EnhancedLogisticRegressionTrainer:
             print("🎯 Training final model with best parameters...")
             best_pipeline.fit(X_train, y_train)
             
-            # Evaluate model
-            y_pred = best_pipeline.predict(X_val)
-            accuracy = accuracy_score(y_val, y_pred)
+            # Evaluate model on training data
+            y_pred = best_pipeline.predict(X_train)
+            accuracy = accuracy_score(y_train, y_pred)
             
-            print(f"✅ Training complete! Validation accuracy: {accuracy:.4f}")
+            print(f"✅ Training complete! Training accuracy: {accuracy:.4f}")
             
             # Get feature names and importance
             feature_names = best_pipeline.named_steps['vectorizer'].get_feature_names_out()
@@ -362,7 +361,6 @@ class EnhancedLogisticRegressionTrainer:
                 'accuracy': accuracy,
                 'labels': unique_labels,
                 'training_examples': len(X_train),
-                'validation_examples': len(X_val),
                 'total_features': len(feature_names),
                 'model': best_pipeline  # This is the key field the API expects
             }

@@ -80,9 +80,15 @@ export default function TrainPage() {
   const [lastDataRefresh, setLastDataRefresh] = useState<number>(0);
   
   // Image collection state
-  const [images, setImages] = useState<any[]>([]);
+  const [images, setImages] = useState<{ label: string; image_url: string; id: string; filename: string }[]>([]);
   const [isUploadingImages, setIsUploadingImages] = useState(false);
   const [isLoadingImages, setIsLoadingImages] = useState(false);
+
+  // Image delete state
+  const [isDeletingImageLabel, setIsDeletingImageLabel] = useState(false);
+  const [isDeletingImageExamples, setIsDeletingImageExamples] = useState(false);
+  const [deletingImageLabelId, setDeletingImageLabelId] = useState<string | null>(null);
+  const [deletingImageExampleId, setDeletingImageExampleId] = useState<string | null>(null);
 
   const params = useParams();
   const urlUserId = params?.userid as string;
@@ -313,6 +319,71 @@ export default function TrainPage() {
     return mergedLabels;
   };
 
+  // Unified label management function that combines text and image labels
+  const createUnifiedLabels = (textLabels: Label[], imageLabels: string[], apiLabels: string[]) => {
+    // Create a map to track all labels and their sources
+    const labelMap = new Map<string, { label: Label; sources: Set<string> }>();
+    
+    // Add text labels (from examples)
+    textLabels.forEach(label => {
+      labelMap.set(label.name, { label, sources: new Set(['text']) });
+    });
+    
+    // Add image labels (from images)
+    imageLabels.forEach(labelName => {
+      if (labelMap.has(labelName)) {
+        labelMap.get(labelName)!.sources.add('image');
+      } else {
+        // Create a new label for image-only labels
+        const newLabel: Label = {
+          id: `label-${Date.now()}-${Math.random()}`,
+          name: labelName,
+          examples: [], // Image labels don't have text examples
+          createdAt: new Date().toLocaleDateString()
+        };
+        labelMap.set(labelName, { label: newLabel, sources: new Set(['image']) });
+      }
+    });
+    
+    // Add API labels (from backend labels list)
+    apiLabels.forEach(labelName => {
+      if (labelMap.has(labelName)) {
+        labelMap.get(labelName)!.sources.add('api');
+      } else {
+        // Create a new label for API-only labels (empty labels)
+        const newLabel: Label = {
+          id: `label-${Date.now()}-${Math.random()}`,
+          name: labelName,
+          examples: [],
+          createdAt: new Date().toLocaleDateString()
+        };
+        labelMap.set(labelName, { label: newLabel, sources: new Set(['api']) });
+      }
+    });
+    
+    // Create ordered labels: new labels first, then existing labels in their original order
+    const orderedLabels: Label[] = [];
+    const seenLabels = new Set<string>();
+    
+    // First, add all labels in the order they appear in the API labels (maintains backend order)
+    apiLabels.forEach(labelName => {
+      if (labelMap.has(labelName) && !seenLabels.has(labelName)) {
+        orderedLabels.push(labelMap.get(labelName)!.label);
+        seenLabels.add(labelName);
+      }
+    });
+    
+    // Then add any remaining labels (image-only or text-only labels not in API)
+    labelMap.forEach(({ label }, labelName) => {
+      if (!seenLabels.has(labelName)) {
+        orderedLabels.unshift(label); // Add new labels at the top
+        seenLabels.add(labelName);
+      }
+    });
+    
+    return orderedLabels;
+  };
+
   const refreshExamplesFromAPI = async (forceRefresh = false) => {
     if (!actualSessionId || !actualProjectId) return;
     
@@ -352,32 +423,33 @@ export default function TrainPage() {
             });
           }
           
-          // Create labels array based on API data
-          const apiLabels: Label[] = [];
+          // Create text labels from API labels list (includes empty labels)
+          const textLabels: Label[] = [];
+          const apiLabels = result.labels || [];
           
-          // Get all unique labels - from examples AND from the labels list in the response
-          const labelsFromExamples = result.examples ? [...new Set(result.examples.map((ex) => ex.label))] as string[] : [];
-          const labelsFromAPI = result.labels || []; // Get labels from API response if available
-          
-          // Combine both sources of labels and remove duplicates
-          const allUniqueLabels = [...new Set([...labelsFromExamples, ...labelsFromAPI])] as string[];
-          
-          allUniqueLabels.forEach(labelName => {
-            apiLabels.push({
+          // Use API labels list to preserve empty labels, not just labels from examples
+          apiLabels.forEach(labelName => {
+            textLabels.push({
               id: `label-${Date.now()}-${Math.random()}`,
               name: labelName,
-              examples: examplesByLabel[labelName] || [], // Will be empty array for labels without examples
+              examples: examplesByLabel[labelName] || [], // Examples will be empty for empty labels
               createdAt: new Date().toLocaleDateString()
             });
           });
           
+          // Get image labels from current images state
+          const imageLabels = [...new Set(images.map(img => img.label).filter(Boolean))];
+          
+          // Use unified label management to combine all sources
+          const unifiedLabels = createUnifiedLabels(textLabels, imageLabels, []);
+          
           // Load locally saved labels to preserve any locally created labels
           const localLabels = loadLocalLabels(actualSessionId, actualProjectId);
           
-          // Merge API labels with local labels, preserving local labels that don't exist in API yet
-          const mergedLabels = mergeLabels(apiLabels, localLabels);
+          // Merge with local labels, preserving local labels that don't exist in unified labels yet
+          const mergedLabels = mergeLabels(unifiedLabels, localLabels);
           
-          console.log('🔄 Updating labels with merged data (API + local):', mergedLabels);
+          console.log('🔄 Updating labels with unified data (text + image + API + local):', mergedLabels);
           setLabels(mergedLabels);
           
           // Set flag that initial data has been loaded
@@ -606,12 +678,13 @@ export default function TrainPage() {
         createdAt: new Date().toLocaleDateString()
       };
       
-      const updatedLabels = [...labels, newLabel];
+      // Add new label at the top of the list
+      const updatedLabels = [newLabel, ...labels];
       setLabels(updatedLabels);
       
-      // Save only the new local label to localStorage
+      // Save only the new local label to localStorage (also at the top)
       const currentLocalLabels = loadLocalLabels(actualSessionId, actualProjectId);
-      const updatedLocalLabels = [...currentLocalLabels, newLabel];
+      const updatedLocalLabels = [newLabel, ...currentLocalLabels];
       saveLocalLabels(actualSessionId, actualProjectId, updatedLocalLabels);
       
       // Label created successfully - examples will be submitted when added
@@ -986,31 +1059,32 @@ export default function TrainPage() {
     }
     
     // Show confirmation dialog
-    if (!confirm(`Are you sure you want to delete ALL ${label.examples.length} examples from the "${label.name}" label? This action cannot be undone.`)) {
+    if (!confirm(`Are you sure you want to delete ALL ${label.examples.length} examples from the "${label.name}" label? The label will remain but will be empty. This action cannot be undone.`)) {
       return;
     }
     
     setDeletingExamplesByLabel(prev => new Set(prev).add(labelId));
     
     try {
-      console.log('🗑️ Deleting all examples by label via API');
+      console.log('🗑️ Deleting all examples by label via API (keeping label empty)');
       console.log('Session ID:', actualSessionId);
       console.log('Project ID:', actualProjectId);
       console.log('Label:', label.name);
       console.log('Examples count:', label.examples.length);
       
-             const response = await fetch(`${config.apiBaseUrl}${config.api.guests.deleteExamplesByLabel(actualSessionId, actualProjectId, label.name)}?session_id=${actualSessionId}`, {
-         method: 'DELETE',
-         headers: {
-           'Content-Type': 'application/json',
-         },
-       });
+      // Use the correct API endpoint for deleting examples by label
+      const response = await fetch(`${config.apiBaseUrl}${config.api.guests.deleteExamplesByLabel(actualSessionId, actualProjectId, label.name)}?session_id=${actualSessionId}`, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
       
       console.log('🗑️ Delete Examples by Label API Response Status:', response.status);
       
       if (response.ok) {
         const result = await response.json();
-        console.log('✅ All examples deleted successfully:', result);
+        console.log('✅ All examples deleted successfully (label kept empty):', result);
         
         // Refresh from API to ensure sync - this will update the UI with the correct state
         await refreshExamplesFromAPI(true);
@@ -1076,8 +1150,65 @@ export default function TrainPage() {
       if (response.ok) {
         const result = await response.json();
         console.log('🖼️ Images response:', result);
+        console.log('🖼️ Images array:', result.images);
+        console.log('🖼️ Labels array:', result.labels);
+        console.log('🖼️ Images count:', result.images?.length || 0);
+        console.log('🖼️ Labels count:', result.labels?.length || 0);
+        
         setImages(result.images || []);
+        
+        // Get image labels from the loaded images
+        const imageLabels = [...new Set(result.images?.map((img: { label: string }) => img.label).filter(Boolean) || [])] as string[];
+        
+        // Get API labels from the response
+        const apiLabels = result.labels || [];
+        
+        // Create text labels from API labels list (includes empty labels)
+        const textLabels: Label[] = [];
+        apiLabels.forEach((labelName: string) => {
+          // Find existing label from current state to preserve examples
+          const existingLabel = labels.find(l => l.name === labelName);
+          textLabels.push({
+            id: existingLabel?.id || `label-${Date.now()}-${Math.random()}`,
+            name: labelName,
+            examples: existingLabel?.examples || [],
+            createdAt: existingLabel?.createdAt || new Date().toLocaleDateString()
+          });
+        });
+        
+        // Debug: Log what we're passing to createUnifiedLabels
+        console.log('🖼️ Debug - textLabels:', textLabels.map(l => l.name));
+        console.log('🖼️ Debug - imageLabels:', imageLabels);
+        console.log('🖼️ Debug - apiLabels:', apiLabels);
+        
+        // Use unified label management to combine all sources
+        const unifiedLabels = createUnifiedLabels(textLabels, imageLabels, apiLabels);
+        
+        console.log('🖼️ Debug - unifiedLabels result:', unifiedLabels.map(l => l.name));
+        
+        // Load locally saved labels to preserve any locally created labels
+        const localLabels = loadLocalLabels(actualSessionId, actualProjectId);
+        
+        // Merge with local labels, preserving local labels that don't exist in unified labels yet
+        const mergedLabels = mergeLabels(unifiedLabels, localLabels);
+        
+        console.log('🖼️ Updating labels with unified data (text + image + API + local):', mergedLabels);
+        console.log('🖼️ Final labels being set:', mergedLabels.map(l => l.name));
+        setLabels(mergedLabels);
+        
         console.log('🖼️ Set images count:', result.images?.length || 0);
+        console.log('🖼️ Set labels:', result.labels || []);
+        
+        // Debug: Check if images have the expected structure
+        if (result.images && result.images.length > 0) {
+          console.log('🖼️ First image structure:', result.images[0]);
+          console.log('🖼️ All image labels:', result.images.map((img: { label: string }) => img.label));
+        }
+        
+        // Debug: Check for potential issues
+        if (result.images && result.images.length > 0 && (!result.labels || result.labels.length === 0)) {
+          console.warn('⚠️ Images exist but no labels in labels array - this might cause display issues');
+        }
       } else {
         console.error('Failed to load images:', response.status);
         const errorText = await response.text();
@@ -1099,30 +1230,25 @@ export default function TrainPage() {
       const formData = new FormData();
       files.forEach(file => {
         formData.append('files', file);
-        console.log('📤 Added file to FormData:', file.name, file.type, file.size);
       });
       formData.append('label', label);
       
       const url = `${config.apiBaseUrl}${config.api.guests.images(actualSessionId, actualProjectId)}`;
-      console.log('📤 Uploading to:', url);
       
       const response = await fetch(url, {
         method: 'POST',
         body: formData,
       });
       
-      console.log('📤 Upload response status:', response.status);
       
       if (response.ok) {
         const result = await response.json();
-        console.log('📤 Images uploaded successfully:', result);
         // Reload images to show the new ones
         await loadImages();
         // Also refresh labels to update counts
         await refreshExamplesFromAPI(true);
       } else {
         const errorData = await response.json();
-        console.error('📤 Upload failed:', errorData);
         alert(`Failed to upload images: ${errorData.detail || 'Unknown error'}`);
       }
     } catch (error) {
@@ -1137,6 +1263,314 @@ export default function TrainPage() {
     // For now, just remove from local state
     // In a full implementation, you'd call a delete API endpoint
     setImages(prev => prev.filter(img => img.image_url !== imageUrl));
+  };
+
+  // Image delete functions
+  const handleDeleteImageLabel = async (label: string) => {
+    if (!actualSessionId || !actualProjectId) return;
+    
+    // Show confirmation dialog
+    const imagesWithLabel = images.filter(img => img.label === label);
+    if (!confirm(`Are you sure you want to delete the image label "${label}"${imagesWithLabel.length > 0 ? ` and all ${imagesWithLabel.length} images` : ''}? This action cannot be undone.`)) {
+      return;
+    }
+    
+    setIsDeletingImageLabel(true);
+    setDeletingImageLabelId(label);
+    
+    try {
+      console.log('🗑️ Deleting image label via API:', label);
+      
+      const response = await fetch(`${config.apiBaseUrl}${config.api.guests.deleteImageLabel(actualSessionId, actualProjectId, label)}?session_id=${actualSessionId}`, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+      
+      console.log('🗑️ Delete Image Label API Response Status:', response.status);
+      
+      if (response.ok) {
+        const result = await response.json();
+        console.log('✅ Image label deleted successfully:', result);
+        
+        // Update local state immediately to prevent UI issues
+        const remainingImages = images.filter(img => img.label !== label);
+        setImages(remainingImages);
+        
+        // Refresh labels to update the unified label state
+        await refreshExamplesFromAPI(true);
+        
+        console.log('🖼️ Remaining images after label deletion:', remainingImages);
+        
+        // Also reload from API to ensure consistency
+        await loadImages();
+      } else {
+        console.error('❌ Delete Image Label API failed:', response.status);
+        
+        let errorDetails;
+        try {
+          errorDetails = await response.json();
+          console.error('📋 Error Details:', errorDetails);
+        } catch (jsonError) {
+          const errorText = await response.text();
+          console.error('📝 Error Text:', errorText);
+          errorDetails = { detail: errorText };
+        }
+        
+        // Show user-friendly error
+        if (response.status === 404) {
+          alert('Image label not found. It may have already been deleted.');
+        } else if (response.status === 403) {
+          alert('Access denied. You do not have permission to delete this image label.');
+        } else if (response.status === 500) {
+          alert('Server error occurred while deleting the image label. Please try again later.');
+        } else {
+          alert(`Failed to delete image label (${response.status}): ${errorDetails.detail || 'Unknown error'}`);
+        }
+      }
+    } catch (error) {
+      console.error('❌ Network error during image label deletion:', error);
+      alert('Network error: Failed to connect to the server. Please check your connection and try again.');
+    } finally {
+      setIsDeletingImageLabel(false);
+      setDeletingImageLabelId(null);
+    }
+  };
+
+  const handleDeleteImageExamplesByLabel = async (label: string) => {
+    if (!actualSessionId || !actualProjectId) return;
+    
+    const imagesWithLabel = images.filter(img => img.label === label);
+    if (imagesWithLabel.length === 0) {
+      // Label is already empty - this is fine, just refresh the data
+      console.log('Label is already empty, refreshing data...');
+      await loadImages();
+      return;
+    }
+    
+    // Show confirmation dialog
+    if (!confirm(`Are you sure you want to delete ALL ${imagesWithLabel.length} images from the "${label}" label? The label will remain but will be empty. This action cannot be undone.`)) {
+      return;
+    }
+    
+    setIsDeletingImageExamples(true);
+    setDeletingImageLabelId(label);
+    
+    try {
+      console.log('🗑️ Deleting all image examples by label via API');
+      console.log('Label:', label);
+      console.log('Images count:', imagesWithLabel.length);
+      
+      const response = await fetch(`${config.apiBaseUrl}${config.api.guests.deleteImageExamplesByLabel(actualSessionId, actualProjectId, label)}?session_id=${actualSessionId}`, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+      
+      console.log('🗑️ Delete Image Examples by Label API Response Status:', response.status);
+      
+      if (response.ok) {
+        const result = await response.json();
+        console.log('✅ All image examples deleted successfully:', result);
+        
+        // Update local state immediately to prevent UI issues
+        const remainingImages = images.filter(img => img.label !== label);
+        setImages(remainingImages);
+        
+        // Refresh labels to update the unified label state
+        await refreshExamplesFromAPI(true);
+        
+        // Debug: Log current state after update
+        console.log('🖼️ Current images after Clear All:', remainingImages);
+        
+        // Also reload from API to ensure consistency
+        await loadImages();
+      } else {
+        console.error('❌ Delete Image Examples by Label API failed:', response.status);
+        
+        let errorDetails;
+        try {
+          errorDetails = await response.json();
+          console.error('📋 Error Details:', errorDetails);
+        } catch (jsonError) {
+          const errorText = await response.text();
+          console.error('📝 Error Text:', errorText);
+          errorDetails = { detail: errorText };
+        }
+        
+        // Show user-friendly error
+        if (response.status === 404) {
+          console.log('⚠️ Images not found (might be deleted already), refreshing data...');
+          await loadImages();
+          alert('Images not found. The data has been refreshed to show current state.');
+        } else if (response.status === 403) {
+          alert('Access denied. You do not have permission to delete these images.');
+        } else if (response.status === 500) {
+          alert('Server error occurred while deleting the images. Please try again later.');
+        } else {
+          alert(`Failed to delete images (${response.status}): ${errorDetails.detail || 'Unknown error'}`);
+        }
+      }
+    } catch (error) {
+      console.error('❌ Network error during image examples deletion:', error);
+      alert('Network error: Failed to connect to the server. Please check your connection and try again.');
+    } finally {
+      setIsDeletingImageExamples(false);
+      setDeletingImageLabelId(null);
+    }
+  };
+
+  const handleDeleteSpecificImageExample = async (label: string, exampleIndex: number) => {
+    if (!actualSessionId || !actualProjectId) return;
+    
+    const imagesWithLabel = images.filter(img => img.label === label);
+    const exampleToDelete = imagesWithLabel[exampleIndex];
+    
+    if (!exampleToDelete) {
+      alert('Image not found');
+      return;
+    }
+    
+    // Show confirmation dialog
+    if (!confirm(`Are you sure you want to delete this image from the "${label}" label?`)) {
+      return;
+    }
+    
+    setIsDeletingImageExamples(true);
+    setDeletingImageLabelId(label);
+    setDeletingImageExampleId(`${label}-${exampleIndex}`);
+    
+    try {
+      console.log('🗑️ Deleting specific image example via API');
+      console.log('Label:', label);
+      console.log('Example Index:', exampleIndex);
+      
+      const response = await fetch(`${config.apiBaseUrl}${config.api.guests.deleteSpecificImageExample(actualSessionId, actualProjectId, label, exampleIndex)}?session_id=${actualSessionId}`, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+      
+      console.log('🗑️ Delete Specific Image Example API Response Status:', response.status);
+      
+      if (response.ok) {
+        const result = await response.json();
+        console.log('✅ Image example deleted successfully:', result);
+        
+        // Reload images to show updated state
+        await loadImages();
+      } else {
+        console.error('❌ Delete Specific Image Example API failed:', response.status);
+        
+        let errorDetails;
+        try {
+          errorDetails = await response.json();
+          console.error('📋 Error Details:', errorDetails);
+        } catch (jsonError) {
+          const errorText = await response.text();
+          console.error('📝 Error Text:', errorText);
+          errorDetails = { detail: errorText };
+        }
+        
+        // Show user-friendly error
+        if (response.status === 404) {
+          console.log('⚠️ Image not found (might be deleted already), refreshing data...');
+          await loadImages();
+          alert('Image not found. The data has been refreshed to show current state.');
+        } else if (response.status === 400 && errorDetails.detail && errorDetails.detail.includes('Invalid example index')) {
+          console.log('🔄 Index out of range - refreshing data...');
+          await loadImages();
+          alert('The image data has changed. Please try deleting the image again.');
+        } else if (response.status === 403) {
+          alert('Access denied. You do not have permission to delete this image.');
+        } else if (response.status === 500) {
+          alert('Server error occurred while deleting the image. Please try again later.');
+        } else {
+          alert(`Failed to delete image (${response.status}): ${errorDetails.detail || 'Unknown error'}`);
+        }
+      }
+    } catch (error) {
+      console.error('❌ Network error during specific image deletion:', error);
+      alert('Network error: Failed to connect to the server. Please check your connection and try again.');
+    } finally {
+      setIsDeletingImageExamples(false);
+      setDeletingImageLabelId(null);
+      setDeletingImageExampleId(null);
+    }
+  };
+
+  const handleDeleteEmptyImageLabel = async (label: string) => {
+    if (!actualSessionId || !actualProjectId) return;
+    
+    const imagesWithLabel = images.filter(img => img.label === label);
+    if (imagesWithLabel.length > 0) {
+      alert('This label has images. Please delete all images first or use the "Delete Label" button to delete both label and images.');
+      return;
+    }
+    
+    // Show confirmation dialog
+    if (!confirm(`Are you sure you want to delete the empty image label "${label}"? This action cannot be undone.`)) {
+      return;
+    }
+    
+    setIsDeletingImageLabel(true);
+    setDeletingImageLabelId(label);
+    
+    try {
+      console.log('🗑️ Deleting empty image label via API:', label);
+      
+      const response = await fetch(`${config.apiBaseUrl}${config.api.guests.deleteEmptyImageLabel(actualSessionId, actualProjectId, label)}?session_id=${actualSessionId}`, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+      
+      console.log('🗑️ Delete Empty Image Label API Response Status:', response.status);
+      
+      if (response.ok) {
+        const result = await response.json();
+        console.log('✅ Empty image label deleted successfully:', result);
+        
+        // Refresh labels to update the unified label state
+        await refreshExamplesFromAPI(true);
+        
+        // Also reload from API to ensure consistency
+        await loadImages();
+      } else {
+        console.error('❌ Delete Empty Image Label API failed:', response.status);
+        
+        let errorDetails;
+        try {
+          errorDetails = await response.json();
+          console.error('📋 Error Details:', errorDetails);
+        } catch (jsonError) {
+          const errorText = await response.text();
+          console.error('📝 Error Text:', errorText);
+          errorDetails = { detail: errorText };
+        }
+        
+        // Show user-friendly error
+        if (response.status === 400) {
+          alert(errorDetails.detail || 'This label has images and cannot be deleted as an empty label.');
+        } else if (response.status === 404) {
+          alert('Image label not found. It may have already been deleted.');
+        } else if (response.status === 500) {
+          alert('Server error occurred while deleting the image label. Please try again later.');
+        } else {
+          alert(`Failed to delete empty image label (${response.status}): ${errorDetails.detail || 'Unknown error'}`);
+        }
+      }
+    } catch (error) {
+      console.error('❌ Network error during empty image label deletion:', error);
+      alert('Network error: Failed to connect to the server. Please check your connection and try again.');
+    } finally {
+      setIsDeletingImageLabel(false);
+      setDeletingImageLabelId(null);
+    }
   };
 
 
@@ -1235,10 +1669,20 @@ export default function TrainPage() {
                 <h2 className="text-xl font-semibold text-white mb-4">Your Image Collection</h2>
                 <ImageGallery
                   images={images}
+                  labels={labels.map(label => label.name)}
                   onDelete={handleDeleteImage}
+                  onDeleteLabel={handleDeleteImageLabel}
+                  onDeleteAllExamples={handleDeleteImageExamplesByLabel}
+                  onDeleteSpecificExample={handleDeleteSpecificImageExample}
+                  onDeleteEmptyLabel={handleDeleteEmptyImageLabel}
+                  onUploadImages={handleImageUpload}
                   isLoading={isLoadingImages}
                   sessionId={actualSessionId}
                   projectId={actualProjectId}
+                  isDeletingLabel={isDeletingImageLabel}
+                  isDeletingExamples={isDeletingImageExamples}
+                  deletingLabelId={deletingImageLabelId || undefined}
+                  deletingExampleId={deletingImageExampleId || undefined}
                 />
               </div>
 
@@ -1552,7 +1996,7 @@ export default function TrainPage() {
             
             <div className="p-6">
               <label className="block text-sm font-medium text-[#dcfc84] mb-2">
-                Enter a Label / Class for what you want the AI to classify like "Happy" or "Sad" 
+                Enter a Label / Class for what you want the AI to classify like &quot;Happy&quot; or &quot;Sad&quot; 
               </label>
               <input
                 type="text"
@@ -1605,7 +2049,7 @@ export default function TrainPage() {
             
             <div className="p-6">
               <label className="block text-sm font-medium text-[#dcfc84] mb-2">
-                Enter examples of what you want the AI to recognise as '{labels.find(l => l.id === selectedLabelId)?.name}'
+                Enter examples of what you want the AI to recognise as &apos;{labels.find(l => l.id === selectedLabelId)?.name}&apos;
               </label>
               <textarea
                 value={newExampleText}

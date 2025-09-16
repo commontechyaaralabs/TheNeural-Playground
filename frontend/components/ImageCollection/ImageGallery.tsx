@@ -11,41 +11,101 @@ interface ImageExample {
 
 interface ImageGalleryProps {
   images: ImageExample[];
+  labels?: string[];
   onDelete?: (imageUrl: string) => void;
+  onImageClick?: (imageUrl: string) => void;
+  onDeleteLabel?: (label: string) => void;
+  onDeleteAllExamples?: (label: string) => void;
+  onDeleteSpecificExample?: (label: string, exampleIndex: number) => void;
+  onDeleteEmptyLabel?: (label: string) => void;
+  onUploadImages?: (files: File[], label: string) => void;
   isLoading?: boolean;
   sessionId?: string;
   projectId?: string;
+  isDeletingLabel?: boolean;
+  isDeletingExamples?: boolean;
+  deletingLabelId?: string;
+  deletingExampleId?: string;
 }
 
-export default function ImageGallery({ images, onDelete, isLoading, sessionId, projectId }: ImageGalleryProps) {
+export default function ImageGallery({ 
+  images, 
+  labels = [],
+  onDelete, 
+  onImageClick, 
+  onDeleteLabel,
+  onDeleteAllExamples,
+  onDeleteSpecificExample,
+  onDeleteEmptyLabel,
+  onUploadImages,
+  isLoading, 
+  sessionId, 
+  projectId,
+  isDeletingLabel = false,
+  isDeletingExamples = false,
+  deletingLabelId = '',
+  deletingExampleId = ''
+}: ImageGalleryProps) {
   const [selectedImage, setSelectedImage] = useState<ImageExample | null>(null);
   const [groupedImages, setGroupedImages] = useState<Record<string, ImageExample[]>>({});
 
   // Debug logging
   useEffect(() => {
-    console.log('🖼️ ImageGallery received images:', images);
     if (images.length > 0) {
-      console.log('🖼️ First image object:', images[0]);
-      console.log('🖼️ Image URL:', images[0]?.image_url);
+
     }
   }, [images]);
 
-  // Group images by label
+  // Group images by label and include empty labels
   useEffect(() => {
-    console.log('🖼️ Grouping images:', images);
-    const grouped = images.reduce((acc, image) => {
-      if (!acc[image.label]) {
-        acc[image.label] = [];
+
+    
+    const grouped: Record<string, ImageExample[]> = {};
+    
+    // Get all unique labels from both sources
+    const labelsFromArray = labels || [];
+    const labelsFromImages = [...new Set(images.map(img => img.label).filter(Boolean))];
+    const allUniqueLabels = [...new Set([...labelsFromArray, ...labelsFromImages])];
+    
+    console.log('🖼️ Labels from array:', labelsFromArray);
+    console.log('🖼️ Labels from images:', labelsFromImages);
+    console.log('🖼️ All unique labels:', allUniqueLabels);
+    
+    // Initialize all labels with empty arrays
+    allUniqueLabels.forEach(label => {
+      grouped[label] = [];
+    });
+    
+    // Add images to their respective labels
+    images.forEach(image => {
+      if (image.label && grouped[image.label]) {
+        grouped[image.label].push(image);
       }
-      acc[image.label].push(image);
-      return acc;
-    }, {} as Record<string, ImageExample[]>);
-    console.log('🖼️ Grouped images:', grouped);
+    });
+    
+    console.log('🖼️ Final grouped images:', grouped);
     setGroupedImages(grouped);
-  }, [images]);
+  }, [images, labels]);
+
+  // Create a stable label order that preserves existing order and puts new labels at top
+  const getStableLabelOrder = () => {
+    const labelsFromArray = labels || [];
+    const labelsFromImages = Object.keys(groupedImages || {});
+    
+    // Create ordered labels: labels array first (maintains order), then any additional labels from images
+    const orderedLabels = [...labelsFromArray];
+    labelsFromImages.forEach(label => {
+      if (!orderedLabels.includes(label)) {
+        // Add new labels at the top to maintain "newest first" ordering
+        orderedLabels.unshift(label);
+      }
+    });
+
+    
+    return orderedLabels;
+  };
 
   const getImageUrl = (gcsUrl: string) => {
-    console.log('🖼️ Converting GCS URL:', gcsUrl);
     // Convert GCS URL to use our backend endpoint
     if (gcsUrl.startsWith('gs://') && sessionId && projectId) {
       // Extract the path after the bucket name
@@ -59,12 +119,10 @@ export default function ImageGallery({ images, onDelete, isLoading, sessionId, p
           // Skip the first part (project_id) and join the rest (label/filename)
           const imagePath = pathAfterImages.slice(1).join('/');
           const backendUrl = `${config.apiBaseUrl}/api/guests/session/${sessionId}/projects/${projectId}/images/${imagePath}`;
-          console.log('🖼️ Converted to backend URL:', backendUrl);
           return backendUrl;
         }
       }
     }
-    console.log('🖼️ Using URL as-is:', gcsUrl);
     return gcsUrl;
   };
 
@@ -77,7 +135,7 @@ export default function ImageGallery({ images, onDelete, isLoading, sessionId, p
     );
   }
 
-  if (images.length === 0) {
+  if (images.length === 0 && labels.length === 0) {
     return (
       <div className="text-center py-12">
         <div className="text-6xl text-white/20 mb-4">📷</div>
@@ -101,12 +159,12 @@ export default function ImageGallery({ images, onDelete, isLoading, sessionId, p
           <div className="text-right">
             <p className="text-sm text-white/50">Labels:</p>
             <div className="flex flex-wrap gap-2 mt-1">
-              {Object.keys(groupedImages).map(label => (
+              {getStableLabelOrder().filter(label => label && label.trim()).map(label => (
                 <span
                   key={label}
                   className="bg-[#dcfc84] text-[#1c1c1c] px-2 py-1 rounded text-xs font-medium"
                 >
-                  {label} ({groupedImages[label].length})
+                  {label} ({groupedImages[label]?.length || 0})
                 </span>
               ))}
             </div>
@@ -115,32 +173,143 @@ export default function ImageGallery({ images, onDelete, isLoading, sessionId, p
       </div>
 
       {/* Images by Label */}
-      {Object.entries(groupedImages).map(([label, labelImages]) => (
+      {getStableLabelOrder().filter(label => label && label.trim()).map(label => {
+        const labelImages = groupedImages[label] || [];
+        return (
         <div key={label} className="space-y-4">
-          <h4 className="text-lg font-medium text-white flex items-center">
-            <span className="bg-[#dcfc84] text-[#1c1c1c] px-3 py-1 rounded-full text-sm font-medium mr-3">
-              {label}
-            </span>
-            <span className="text-white/70 text-sm">
-              {labelImages.length} image{labelImages.length !== 1 ? 's' : ''}
-            </span>
-          </h4>
+          <div className="flex items-center justify-between">
+            <h4 className="text-lg font-medium text-white flex items-center">
+              <span className="bg-[#dcfc84] text-[#1c1c1c] px-3 py-1 rounded-full text-sm font-medium mr-3">
+                {label}
+              </span>
+              <span className="text-white/70 text-sm">
+                {labelImages.length} image{labelImages.length !== 1 ? 's' : ''}
+              </span>
+              {(isDeletingLabel && deletingLabelId === label) && (
+                <span className="ml-2 text-orange-400 text-sm font-normal">Deleting...</span>
+              )}
+              {(isDeletingExamples && deletingLabelId === label) && (
+                <span className="ml-2 text-orange-400 text-sm font-normal">Clearing examples...</span>
+              )}
+            </h4>
+            
+            {/* Action buttons */}
+            <div className="flex items-center gap-2">
+              {/* Add Examples button */}
+              {onUploadImages && (
+                <label className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#dcfc84] text-[#1c1c1c] rounded-lg hover:bg-[#dcfc84]/90 transition-all duration-300 cursor-pointer text-xs font-medium disabled:opacity-50 disabled:cursor-not-allowed">
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                  </svg>
+                  Add Examples
+                  <input
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    onChange={(e) => {
+                      const files = Array.from(e.target.files || []);
+                      if (files.length > 0) {
+                        onUploadImages(files, label);
+                      }
+                    }}
+                    className="hidden"
+                    disabled={isDeletingLabel || isDeletingExamples}
+                  />
+                </label>
+              )}
+
+              {/* Clear All button */}
+              {labelImages.length > 0 && onDeleteAllExamples && (
+                <button
+                  onClick={() => onDeleteAllExamples(label)}
+                  disabled={isDeletingLabel || isDeletingExamples}
+                  className="text-orange-400 hover:text-orange-300 transition-all duration-300 text-xs px-2 py-1 rounded border border-orange-400/30 hover:border-orange-400/50 disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Clear all images but keep the label"
+                >
+                  {isDeletingExamples && deletingLabelId === label ? 'Deleting...' : 'Clear All'}
+                </button>
+              )}
+
+              {/* X button - Delete Entire Label */}
+              {onDeleteLabel && labelImages.length > 0 && (
+                <button
+                  onClick={() => onDeleteLabel(label)}
+                  disabled={isDeletingLabel || isDeletingExamples}
+                  className="text-red-500 hover:text-red-700 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Delete entire label and all images"
+                >
+                  {isDeletingLabel && deletingLabelId === label ? (
+                    <div className="w-4 h-4 border border-red-500/20 border-t-red-500 rounded-full animate-spin"></div>
+                  ) : (
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  )}
+                </button>
+              )}
+
+              {/* Delete Empty Label button */}
+              {onDeleteEmptyLabel && labelImages.length === 0 && (
+                <button
+                  onClick={() => onDeleteEmptyLabel(label)}
+                  disabled={isDeletingLabel || isDeletingExamples}
+                  className="text-red-500 hover:text-red-700 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Delete empty label"
+                >
+                  {isDeletingLabel && deletingLabelId === label ? (
+                    <div className="w-4 h-4 border border-red-500/20 border-t-red-500 rounded-full animate-spin"></div>
+                  ) : (
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  )}
+                </button>
+              )}
+            </div>
+          </div>
           
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
-            {labelImages.map((image, index) => (
+            {labelImages.length === 0 ? (
+              <div className="col-span-full text-center py-8">
+                <div className="text-4xl text-white/20 mb-4">📷</div>
+                <p className="text-white/60 text-sm mb-4">No images for this label</p>
+                {onUploadImages && (
+                  <label className="inline-flex items-center gap-2 px-4 py-2 bg-[#dcfc84] text-[#1c1c1c] rounded-lg hover:bg-[#dcfc84]/90 transition-all duration-300 cursor-pointer text-sm font-medium">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10" />
+                    </svg>
+                    Upload Images
+                    <input
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      onChange={(e) => {
+                        const files = Array.from(e.target.files || []);
+                        if (files.length > 0) {
+                          onUploadImages(files, label);
+                        }
+                      }}
+                      className="hidden"
+                    />
+                  </label>
+                )}
+              </div>
+            ) : (
+              labelImages.map((image, index) => (
               <div
                 key={`${image.label}-${index}`}
                 className="relative group cursor-pointer"
-                onClick={() => setSelectedImage(image)}
+                onClick={() => {
+                  setSelectedImage(image);
+                  onImageClick?.(image.image_url);
+                }}
               >
                 <div className="aspect-square rounded-lg overflow-hidden border border-[#bc6cd3]/20 hover:border-[#dcfc84] transition-colors">
                   <img
                     src={getImageUrl(image.image_url)}
                     alt={`${image.label} example`}
                     className="w-full h-full object-cover"
-                    onLoad={() => console.log('🖼️ Image loaded successfully:', image.filename)}
                     onError={(e) => {
-                      console.log('🖼️ Image failed to load:', image.filename, 'URL:', getImageUrl(image.image_url));
                       // Fallback for images that can't be loaded
                       const target = e.target as HTMLImageElement;
                       target.src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCIgZmlsbD0iIzMzMzMzMyIvPjx0ZXh0IHg9IjUwIiB5PSI1MCIgZm9udC1mYW1pbHk9IkFyaWFsIiBmb250LXNpemU9IjE0IiBmaWxsPSIjNjY2IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBkeT0iLjNlbSI+SW1hZ2U8L3RleHQ+PC9zdmc+';
@@ -152,7 +321,31 @@ export default function ImageGallery({ images, onDelete, isLoading, sessionId, p
                 <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                   <div className="text-center">
                     <p className="text-white text-xs font-medium mb-1">View</p>
-                    {onDelete && (
+                    {onDeleteSpecificExample && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          console.log('🗑️ Delete button clicked for image:', image);
+                          console.log('🗑️ Current groupedImages state:', groupedImages);
+                          console.log('🗑️ Images for label:', groupedImages[image.label]);
+                          
+                          // Use the index from the map function directly since it should be correct
+                          console.log('🗑️ Using index from map function:', index);
+                          console.log('🗑️ Total images in this label group:', groupedImages[image.label]?.length || 0);
+                          
+                          onDeleteSpecificExample(image.label, index);
+                        }}
+                        disabled={isDeletingLabel || isDeletingExamples}
+                        className="text-red-400 hover:text-red-300 text-xs disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {isDeletingExamples && deletingLabelId === image.label && deletingExampleId === `${image.label}-${index}` ? (
+                          <div className="w-3 h-3 border border-red-400/20 border-t-red-400 rounded-full animate-spin"></div>
+                        ) : (
+                          'Delete'
+                        )}
+                      </button>
+                    )}
+                    {onDelete && !onDeleteSpecificExample && (
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
@@ -170,10 +363,12 @@ export default function ImageGallery({ images, onDelete, isLoading, sessionId, p
                   {image.filename}
                 </p>
               </div>
-            ))}
+              ))
+            )}
           </div>
         </div>
-      ))}
+        );
+      })}
 
       {/* Image Modal */}
       {selectedImage && (

@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Query, Dep
 from typing import List, Optional
 import json
 import logging
+import asyncio
 from datetime import datetime, timezone
 import uuid
 
@@ -16,6 +17,7 @@ from ...models import (
 from ...services.guest_service import GuestService
 from ...services.project_service import ProjectService
 from ...training_service import trainer
+from ...image_training_service import image_trainer
 from ...training_job_service import training_job_service
 from ...config import gcp_clients
 
@@ -642,8 +644,322 @@ async def upload_guest_images(
             "message": f"Uploaded {len(uploaded_images)} images with label '{label}'",
             "totalImages": result['totalImages'],
             "labels": result['labels'],
-            "uploadedImages": len(uploaded_images)
+            "uploadedImages": len(uploaded_images),
+            "imageUrls": [img["image_url"] for img in uploaded_images]  # Include image URLs for prediction
         }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/session/{session_id}/projects/{project_id}/images/url", response_model=dict)
+async def upload_guest_images_from_url(
+    session_id: str,
+    project_id: str,
+    image_url: str = Form(..., description="URL of the image to upload"),
+    label: str = Form(..., description="Label for this image"),
+    session: dict = Depends(validate_session_dependency),
+    project_service: ProjectService = Depends(get_project_service)
+):
+    """Upload image from URL to a guest project"""
+    try:
+        # Verify project belongs to this session
+        project = await project_service.get_project(project_id)
+        if not project or project.student_id != session_id:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        # Validate project type
+        if project.type != "image-recognition":
+            raise HTTPException(
+                status_code=400,
+                detail="Image uploads are only allowed for image-recognition projects"
+            )
+        
+        # Validate URL
+        if not image_url.startswith(('http://', 'https://')):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid URL format. Must start with http:// or https://"
+            )
+        
+        import aiohttp
+        import uuid
+        from urllib.parse import urlparse
+        
+        # Download image from URL
+        async with aiohttp.ClientSession() as session_client:
+            try:
+                async with session_client.get(image_url, timeout=30) as response:
+                    if response.status != 200:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Failed to download image from URL. HTTP {response.status}"
+                        )
+                    
+                    # Get content type
+                    content_type = response.headers.get('content-type', 'image/jpeg')
+                    
+                    # Validate content type
+                    allowed_types = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp']
+                    if not any(allowed_type in content_type for allowed_type in allowed_types):
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Invalid image type: {content_type}. Only JPEG, PNG, GIF, and WebP images are allowed."
+                        )
+                    
+                    # Read image content
+                    file_content = await response.read()
+                    
+                    # Check file size (10MB limit)
+                    if len(file_content) > 10 * 1024 * 1024:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="Image is too large. Maximum size is 10MB."
+                        )
+                    
+                    # Generate filename from URL or create one
+                    parsed_url = urlparse(image_url)
+                    filename = parsed_url.path.split('/')[-1] if parsed_url.path.split('/')[-1] else f"image_{uuid.uuid4().hex[:8]}.jpg"
+                    
+                    # Ensure filename has an extension
+                    if '.' not in filename:
+                        if 'jpeg' in content_type or 'jpg' in content_type:
+                            filename += '.jpg'
+                        elif 'png' in content_type:
+                            filename += '.png'
+                        elif 'gif' in content_type:
+                            filename += '.gif'
+                        elif 'webp' in content_type:
+                            filename += '.webp'
+                        else:
+                            filename += '.jpg'  # Default to jpg
+                    
+                    # Upload to GCS
+                    gcs_path = f"images/{project_id}/{label}/{filename}"
+                    blob = project_service.bucket.blob(gcs_path)
+                    blob.upload_from_string(file_content, content_type=content_type)
+                    
+                    # Generate GCS URL
+                    gcs_url = f"gs://{project_service.bucket.name}/{gcs_path}"
+                    
+                    # Create image data
+                    uploaded_image = {
+                        "image_url": gcs_url,
+                        "label": label,
+                        "filename": filename,
+                        "size": len(file_content),
+                        "content_type": content_type
+                    }
+                    
+                    # Add image example to project
+                    result = await project_service.add_image_examples(project_id, [uploaded_image])
+                    
+                    return {
+                        "success": True,
+                        "message": f"Uploaded image from URL with label '{label}'",
+                        "totalImages": result['totalImages'],
+                        "labels": result['labels'],
+                        "uploadedImages": 1,
+                        "imageUrls": [gcs_url]  # Include GCS URL for prediction
+                    }
+                    
+            except aiohttp.ClientError as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Failed to download image from URL: {str(e)}"
+                )
+            except asyncio.TimeoutError:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Timeout while downloading image from URL"
+                )
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/session/{session_id}/projects/{project_id}/predict-image", response_model=dict)
+async def upload_image_for_prediction_only(
+    session_id: str,
+    project_id: str,
+    files: List[UploadFile] = File(..., description="Image files for prediction only"),
+    session: dict = Depends(validate_session_dependency),
+    project_service: ProjectService = Depends(get_project_service)
+):
+    """Upload image for prediction only - does NOT store in training dataset"""
+    try:
+        # Verify project belongs to this session
+        project = await project_service.get_project(project_id)
+        if not project or project.student_id != session_id:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        # Validate project type
+        if project.type != "image-recognition":
+            raise HTTPException(
+                status_code=400,
+                detail="Image predictions are only allowed for image-recognition projects"
+            )
+        
+        # Validate number of files (only 1 for prediction)
+        if len(files) != 1:
+            raise HTTPException(
+                status_code=400,
+                detail="Only one image can be uploaded for prediction at a time"
+            )
+        
+        # Validate file types
+        allowed_types = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp']
+        file = files[0]
+        
+        if file.content_type not in allowed_types:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid file type: {file.content_type}. Only JPEG, PNG, GIF, and WebP images are allowed."
+            )
+        
+        # Check file size (10MB limit per image)
+        file_content = await file.read()
+        if len(file_content) > 10 * 1024 * 1024:
+            raise HTTPException(
+                status_code=400,
+                detail=f"File {file.filename} is too large. Maximum size is 10MB per image."
+            )
+        
+        # Upload to GCS with prediction-specific path (not in training data)
+        gcs_path = f"predictions/{project_id}/{file.filename}"
+        blob = project_service.bucket.blob(gcs_path)
+        blob.upload_from_string(file_content, content_type=file.content_type)
+        
+        # Generate GCS URL for prediction
+        gcs_url = f"gs://{project_service.bucket.name}/{gcs_path}"
+        
+        return {
+            "success": True,
+            "message": "Image uploaded for prediction",
+            "imageUrl": gcs_url,
+            "filename": file.filename,
+            "size": len(file_content),
+            "content_type": file.content_type
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/session/{session_id}/projects/{project_id}/predict-image/url", response_model=dict)
+async def upload_image_url_for_prediction_only(
+    session_id: str,
+    project_id: str,
+    image_url: str = Form(..., description="URL of the image for prediction only"),
+    session: dict = Depends(validate_session_dependency),
+    project_service: ProjectService = Depends(get_project_service)
+):
+    """Upload image from URL for prediction only - does NOT store in training dataset"""
+    try:
+        # Verify project belongs to this session
+        project = await project_service.get_project(project_id)
+        if not project or project.student_id != session_id:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        # Validate project type
+        if project.type != "image-recognition":
+            raise HTTPException(
+                status_code=400,
+                detail="Image predictions are only allowed for image-recognition projects"
+            )
+        
+        # Validate URL
+        if not image_url.startswith(('http://', 'https://')):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid URL format. Must start with http:// or https://"
+            )
+        
+        import aiohttp
+        import uuid
+        from urllib.parse import urlparse
+        
+        # Download image from URL
+        async with aiohttp.ClientSession() as session_client:
+            try:
+                async with session_client.get(image_url, timeout=30) as response:
+                    if response.status != 200:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Failed to download image from URL. HTTP {response.status}"
+                        )
+                    
+                    # Get content type
+                    content_type = response.headers.get('content-type', 'image/jpeg')
+                    
+                    # Validate content type
+                    allowed_types = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp']
+                    if not any(allowed_type in content_type for allowed_type in allowed_types):
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Invalid image type: {content_type}. Only JPEG, PNG, GIF, and WebP images are allowed."
+                        )
+                    
+                    # Read image content
+                    file_content = await response.read()
+                    
+                    # Check file size (10MB limit)
+                    if len(file_content) > 10 * 1024 * 1024:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="Image is too large. Maximum size is 10MB."
+                        )
+                    
+                    # Generate filename from URL or create one
+                    parsed_url = urlparse(image_url)
+                    filename = parsed_url.path.split('/')[-1] if parsed_url.path.split('/')[-1] else f"prediction_{uuid.uuid4().hex[:8]}.jpg"
+                    
+                    # Ensure filename has an extension
+                    if '.' not in filename:
+                        if 'jpeg' in content_type or 'jpg' in content_type:
+                            filename += '.jpg'
+                        elif 'png' in content_type:
+                            filename += '.png'
+                        elif 'gif' in content_type:
+                            filename += '.gif'
+                        elif 'webp' in content_type:
+                            filename += '.webp'
+                        else:
+                            filename += '.jpg'  # Default to jpg
+                    
+                    # Upload to GCS with prediction-specific path (not in training data)
+                    gcs_path = f"predictions/{project_id}/{filename}"
+                    blob = project_service.bucket.blob(gcs_path)
+                    blob.upload_from_string(file_content, content_type=content_type)
+                    
+                    # Generate GCS URL for prediction
+                    gcs_url = f"gs://{project_service.bucket.name}/{gcs_path}"
+                    
+                    return {
+                        "success": True,
+                        "message": "Image uploaded for prediction from URL",
+                        "imageUrl": gcs_url,
+                        "filename": filename,
+                        "size": len(file_content),
+                        "content_type": content_type
+                    }
+                    
+            except aiohttp.ClientError as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Failed to download image from URL: {str(e)}"
+                )
+            except asyncio.TimeoutError:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Timeout while downloading image from URL"
+                )
+    
     except HTTPException:
         raise
     except Exception as e:
@@ -782,7 +1098,7 @@ async def start_guest_training(
     session: dict = Depends(validate_session_dependency),
     guest_service: GuestService = Depends(get_guest_service)
 ):
-    """Start training job for a guest project using logistic regression"""
+    """Start training job for a guest project using logistic regression or EfficientNet"""
     try:
         # Get guest project by project_id from the projects collection
         guest_project = await guest_service.get_guest_project_by_id(project_id)
@@ -793,6 +1109,32 @@ async def start_guest_training(
         if guest_project.get('createdBy') != f"guest:{session_id}":
             raise HTTPException(status_code=404, detail="Project not found in this session")
         
+        project_type = guest_project.get('type', 'text-recognition')
+        
+        # Handle image recognition projects
+        if project_type == 'image-recognition':
+            return await _train_image_recognition_project(
+                session_id, project_id, guest_project, training_config, guest_service
+            )
+        
+        # Handle text recognition projects (existing logic)
+        return await _train_text_recognition_project(
+            session_id, project_id, guest_project, training_config, guest_service
+        )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Training error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def _train_text_recognition_project(
+    session_id: str, project_id: str, guest_project: dict, 
+    training_config: Optional[TrainingConfig], guest_service: GuestService
+) -> TrainingResponse:
+    """Train text recognition project using logistic regression"""
+    try:
         # Get examples for training from guest project
         examples = guest_project.get('dataset', {}).get('examples', [])
         if not examples or len(examples) < 2:
@@ -803,7 +1145,7 @@ async def start_guest_training(
         
         # Convert examples to the format expected by trainer
         try:
-            logger.info(f"Starting simple training for project {project_id}")
+            logger.info(f"Starting text recognition training for project {project_id}")
             logger.info(f"Examples count: {len(examples)}")
             logger.info(f"Example types: {[type(ex).__name__ for ex in examples]}")
             
@@ -830,7 +1172,7 @@ async def start_guest_training(
             
             # Try direct training first (for debugging)
             try:
-                logger.info("Attempting direct training...")
+                logger.info("Attempting direct text training...")
                 training_result = trainer.train_model(training_examples)
                 logger.info(f"Direct training successful: {training_result}")
                 
@@ -901,10 +1243,89 @@ async def start_guest_training(
                 message=str(e)
             )
             
-    except HTTPException:
-        raise
     except Exception as e:
-        logger.error(f"Training error: {str(e)}")
+        logger.error(f"Text training error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def _train_image_recognition_project(
+    session_id: str, project_id: str, guest_project: dict, 
+    training_config: Optional[TrainingConfig], guest_service: GuestService
+) -> TrainingResponse:
+    """Train image recognition project using EfficientNet"""
+    try:
+        # Get image examples for training from guest project
+        image_examples = guest_project.get('dataset', {}).get('image_examples', [])
+        if not image_examples or len(image_examples) < 5:  # Need at least 5 examples
+            raise HTTPException(
+                status_code=400, 
+                detail="Need at least 5 image examples to start training. Add some images first."
+            )
+        
+        logger.info(f"Starting image recognition training for project {project_id}")
+        logger.info(f"Image examples count: {len(image_examples)}")
+        
+        # Update Firestore status to training
+        image_trainer.update_firestore_training_status(project_id, session_id, "training")
+        
+        # Clear any existing model to prevent shape mismatch issues
+        model_path = f"image_recog/{project_id}"
+        logger.info(f"Clearing any existing model at: {model_path}")
+        image_trainer.clear_existing_model(gcp_clients.get_bucket(), model_path)
+        
+        # Clear TensorFlow cache to avoid cached weight issues
+        logger.info("Clearing TensorFlow model cache...")
+        image_trainer.clear_tensorflow_cache()
+        
+        # Prepare training data directly from GCS
+        images, labels, class_names = image_trainer.prepare_training_data_direct(image_examples)
+        
+        try:
+            # Train the model directly
+            training_result = image_trainer.train_model_direct(images, labels, class_names)
+            logger.info(f"Image training successful: {training_result}")
+            
+            # Save the trained model to GCS in native TensorFlow format
+            model_path = f"image_recog/{project_id}"
+            
+            logger.info(f"Saving image model to GCS directory: {model_path}")
+            saved_model_path = image_trainer.save_model(gcp_clients.get_bucket(), model_path)
+            logger.info("Image model saved to GCS successfully")
+            
+            # Update Firestore with completed status and model info
+            image_trainer.update_firestore_training_status(
+                project_id, session_id, "completed", 
+                training_result, saved_model_path
+            )
+            
+            logger.info(f"Guest project {project_id} updated with image model info")
+            
+            # No cleanup needed - no temporary files used
+            
+            # Create a simple training job response
+            return TrainingResponse(
+                success=True,
+                message="Image recognition training completed successfully!",
+                jobId=f"image-{project_id}-{int(datetime.now().timestamp())}"
+            )
+            
+        except Exception as training_error:
+            logger.error(f"Image training failed: {training_error}")
+            logger.error(f"Training error type: {type(training_error)}")
+            logger.error(f"Training error details: {str(training_error)}")
+            
+            # Update Firestore with failed status
+            image_trainer.update_firestore_training_status(project_id, session_id, "failed")
+            
+            # No cleanup needed - no temporary files used
+            
+            return TrainingResponse(
+                success=False,
+                message=f"Image training failed: {str(training_error)}"
+            )
+            
+    except Exception as e:
+        logger.error(f"Image training error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1003,7 +1424,7 @@ async def predict_guest_text(
     session: dict = Depends(validate_session_dependency),
     guest_service: GuestService = Depends(get_guest_service)
 ):
-    """Make prediction using trained guest model"""
+    """Make prediction using trained guest model (text or image)"""
     try:
         # Get guest project by project_id from the projects collection
         guest_project = await guest_service.get_guest_project_by_id(project_id)
@@ -1020,8 +1441,8 @@ async def predict_guest_text(
                 detail="Project is not trained yet. Train the model first."
             )
         
-        # Use the same prediction infrastructure as regular projects
-        # Guest projects store their models in the same format
+        project_type = guest_project.get('type', 'text-recognition')
+        model_type = guest_project.get('model', {}).get('modelType', 'logistic_regression')
         
         # Get the model path from the project
         model_gcs_path = guest_project.get('model', {}).get('gcsPath')
@@ -1031,19 +1452,56 @@ async def predict_guest_text(
                 detail="Model not found. Please ensure the model was saved during training."
             )
         
-        # Make prediction using the trained model
-        prediction_result = trainer.predict_from_gcs(
-            prediction_request.text,
-            gcp_clients.get_bucket(),
-            model_gcs_path
-        )
-        
-        return PredictionResponse(
-            success=True,
-            label=prediction_result['label'],
-            confidence=prediction_result['confidence'],
-            alternatives=prediction_result['alternatives']
-        )
+        # Handle different model types
+        if model_type == 'efficientnet' or project_type == 'image-recognition':
+            # For image recognition, we need to handle image URLs
+            # For now, we'll assume the text field contains a GCS URL to an image
+            if not prediction_request.text.startswith('gs://'):
+                raise HTTPException(
+                    status_code=400,
+                    detail="For image recognition projects, please provide a GCS URL to the image (gs://bucket/path)"
+                )
+            
+            # Always load the model for each prediction (remove the is_trained check)
+            logger.info(f"Loading image model from GCS path: {model_gcs_path}")
+            success = image_trainer.load_model_from_gcs(gcp_clients.get_bucket(), model_gcs_path)
+            if not success:
+                logger.error(f"Failed to load image model from GCS path: {model_gcs_path}")
+                raise HTTPException(
+                    status_code=500,
+                    detail="Failed to load image model from GCS"
+                )
+            logger.info("Image model loaded successfully from GCS")
+            
+            # Make prediction using image URL
+            prediction_result = image_trainer.predict_from_gcs(prediction_request.text)
+            
+            # Convert to the expected format
+            return PredictionResponse(
+                success=True,
+                label=prediction_result['predicted_class'],
+                confidence=prediction_result['confidence'],
+                alternatives=[
+                    {
+                        'label': prob['class'],
+                        'confidence': prob['confidence']
+                    } for prob in prediction_result['all_probabilities'][:2]  # Top 2 alternatives
+                ]
+            )
+        else:
+            # Handle text recognition (existing logic)
+            prediction_result = trainer.predict_from_gcs(
+                prediction_request.text,
+                gcp_clients.get_bucket(),
+                model_gcs_path
+            )
+            
+            return PredictionResponse(
+                success=True,
+                label=prediction_result['label'],
+                confidence=prediction_result['confidence'],
+                alternatives=prediction_result['alternatives']
+            )
         
     except HTTPException:
         raise
@@ -1580,11 +2038,18 @@ async def delete_specific_example(
         
         # Save the complete project with updated dataset to database
         try:
-            # Ensure all dataset fields are properly set
+            # Ensure all dataset fields are properly set and preserve empty labels
             if not hasattr(project.dataset, 'labels') or project.dataset.labels is None:
-                # Regenerate labels from remaining examples
-                all_labels = set(example.label for example in project.dataset.examples)
-                project.dataset.labels = list(all_labels)
+                project.dataset.labels = []
+            
+            # Keep existing labels and add any new ones from examples
+            # This preserves empty labels even when they have no examples
+            existing_labels = set(project.dataset.labels)
+            example_labels = set(example.label for example in project.dataset.examples)
+            
+            # Preserve all existing labels (including empty ones) and add any new labels from examples
+            all_labels = existing_labels.union(example_labels)
+            project.dataset.labels = list(all_labels)
             
             # Use the save_project method to avoid any ProjectUpdate serialization issues
             await project_service.save_project(project)
@@ -1817,6 +2282,384 @@ async def delete_empty_label(
 
 
 # ============================================================================
+# IMAGE RECOGNITION DELETE ENDPOINTS
+# ============================================================================
+
+# More specific routes must come first to avoid conflicts
+@router.delete("/session/{session_id}/projects/{project_id}/images/labels/{label}")
+async def delete_image_label(
+    session_id: str,
+    project_id: str,
+    label: str,
+    session: dict = Depends(validate_session_dependency),
+    guest_service: GuestService = Depends(get_guest_service),
+    project_service: ProjectService = Depends(get_project_service)
+):
+    """Delete an image label completely from a guest project, including all its examples"""
+    try:
+        logger.info(f"Deleting image label '{label}' completely from project {project_id}")
+        
+        # Get guest project
+        guest_project = await guest_service.get_guest_project_by_id(project_id)
+        if not guest_project:
+            raise HTTPException(status_code=404, detail="Guest project not found")
+        
+        # Verify project belongs to this session
+        if guest_project.get('createdBy') != f"guest:{session_id}":
+            raise HTTPException(status_code=404, detail="Project not found in this session")
+        
+        # Get image examples
+        image_examples = guest_project.get('dataset', {}).get('image_examples', [])
+        if not image_examples:
+            raise HTTPException(status_code=404, detail="No image examples found for this project")
+        
+        # Filter examples by label
+        examples_with_label = [ex for ex in image_examples if ex.get('label') == label]
+        if not examples_with_label:
+            raise HTTPException(status_code=404, detail=f"No image examples found with label '{label}'")
+        
+        # Delete all images from GCS
+        deleted_count = 0
+        for example in examples_with_label:
+            image_url = example.get('image_url', '')
+            if image_url and image_url.startswith('gs://'):
+                try:
+                    # Parse GCS URL
+                    url_parts = image_url[5:].split('/', 1)
+                    bucket_name = url_parts[0]
+                    blob_name = url_parts[1]
+                    
+                    # Delete from GCS
+                    bucket = gcp_clients.get_bucket()
+                    blob = bucket.blob(blob_name)
+                    blob.delete()
+                    deleted_count += 1
+                    logger.info(f"Deleted image from GCS: {blob_name}")
+                except Exception as e:
+                    logger.warning(f"Failed to delete image from GCS {image_url}: {e}")
+        
+        # Remove all examples with this label
+        remaining_examples = [ex for ex in image_examples if ex.get('label') != label]
+        
+        # Get the current project to preserve all existing data
+        project = await project_service.get_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        # Update only the image_examples field in the dataset
+        project.dataset.image_examples = remaining_examples
+        
+        # Remove the label from the labels list if it has no examples
+        if project.dataset.labels and label in project.dataset.labels:
+            project.dataset.labels = [l for l in project.dataset.labels if l != label]
+        
+        # Save the complete project to preserve all data
+        await project_service.save_project(project)
+        
+        logger.info(f"Successfully deleted image label '{label}' and {len(examples_with_label)} examples")
+        
+        return {
+            "success": True,
+            "message": f"Successfully deleted image label '{label}' and {len(examples_with_label)} examples",
+            "project_id": project_id,
+            "label": label,
+            "examples_deleted": len(examples_with_label),
+            "gcs_deleted": deleted_count,
+            "label_removed": True
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error deleting image label: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete image label: {str(e)}")
+
+
+@router.delete("/session/{session_id}/projects/{project_id}/images/labels/{label}/empty")
+async def delete_empty_image_label(
+    session_id: str,
+    project_id: str,
+    label: str,
+    session: dict = Depends(validate_session_dependency),
+    guest_service: GuestService = Depends(get_guest_service),
+    project_service: ProjectService = Depends(get_project_service)
+):
+    """Delete an empty image label (label with no examples) from a guest project"""
+    try:
+        logger.info(f"Deleting empty image label '{label}' from project {project_id}")
+        
+        # Get guest project
+        guest_project = await guest_service.get_guest_project_by_id(project_id)
+        if not guest_project:
+            raise HTTPException(status_code=404, detail="Guest project not found")
+        
+        # Verify project belongs to this session
+        if guest_project.get('createdBy') != f"guest:{session_id}":
+            raise HTTPException(status_code=404, detail="Project not found in this session")
+        
+        # Get image examples
+        image_examples = guest_project.get('dataset', {}).get('image_examples', [])
+        
+        # Check if label has examples
+        examples_with_label = [ex for ex in image_examples if ex.get('label') == label] if image_examples else []
+        
+        if examples_with_label:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Image label '{label}' has {len(examples_with_label)} examples. Use the regular label deletion endpoint to delete label with examples."
+            )
+        
+        # Check if label exists in labels list
+        labels = guest_project.get('dataset', {}).get('labels', [])
+        if not labels or label not in labels:
+            raise HTTPException(status_code=404, detail=f"Image label '{label}' not found")
+        
+        # Remove the label from the labels list
+        updated_labels = [l for l in labels if l != label]
+        
+        # Get the current project to preserve all existing data
+        project = await project_service.get_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        # Update only the labels field in the dataset
+        project.dataset.labels = updated_labels
+        
+        # Save the complete project to preserve all data
+        await project_service.save_project(project)
+        
+        logger.info(f"Successfully deleted empty image label '{label}'")
+        
+        return {
+            "success": True,
+            "message": f"Successfully deleted empty image label '{label}'",
+            "project_id": project_id,
+            "label": label,
+            "label_removed": True
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error deleting empty image label: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete empty image label: {str(e)}")
+
+
+@router.delete("/session/{session_id}/projects/{project_id}/images/{label}")
+async def delete_image_examples_by_label(
+    session_id: str,
+    project_id: str,
+    label: str,
+    session: dict = Depends(validate_session_dependency),
+    guest_service: GuestService = Depends(get_guest_service),
+    project_service: ProjectService = Depends(get_project_service)
+):
+    """Delete all image examples under a specific label for a guest project"""
+    try:
+        logger.info(f"Deleting all image examples for label '{label}' in project {project_id}")
+        
+        # Get guest project
+        guest_project = await guest_service.get_guest_project_by_id(project_id)
+        if not guest_project:
+            raise HTTPException(status_code=404, detail="Guest project not found")
+        
+        # Verify project belongs to this session
+        if guest_project.get('createdBy') != f"guest:{session_id}":
+            raise HTTPException(status_code=404, detail="Project not found in this session")
+        
+        # Get image examples
+        image_examples = guest_project.get('dataset', {}).get('image_examples', [])
+        
+        # Filter examples by label
+        examples_with_label = [ex for ex in image_examples if ex.get('label') == label]
+        
+        # If no examples found for this label, that's fine for "Clear All" - just ensure the label exists
+        if not examples_with_label:
+            # Check if the label exists in the labels array
+            current_labels = guest_project.get('dataset', {}).get('labels', [])
+            if label not in current_labels:
+                raise HTTPException(status_code=404, detail=f"Label '{label}' not found in this project")
+            
+            # Label exists but has no examples - this is a valid "Clear All" operation
+            logger.info(f"Label '{label}' has no examples to delete - keeping as empty label")
+            return {
+                "success": True,
+                "message": f"Label '{label}' is already empty",
+                "project_id": project_id,
+                "label": label,
+                "examples_deleted": 0,
+                "gcs_deleted": 0
+            }
+        
+        # Delete images from GCS
+        deleted_count = 0
+        for example in examples_with_label:
+            image_url = example.get('image_url', '')
+            if image_url and image_url.startswith('gs://'):
+                try:
+                    # Parse GCS URL
+                    url_parts = image_url[5:].split('/', 1)
+                    bucket_name = url_parts[0]
+                    blob_name = url_parts[1]
+                    
+                    # Delete from GCS
+                    bucket = gcp_clients.get_bucket()
+                    blob = bucket.blob(blob_name)
+                    blob.delete()
+                    deleted_count += 1
+                    logger.info(f"Deleted image from GCS: {blob_name}")
+                except Exception as e:
+                    logger.warning(f"Failed to delete image from GCS {image_url}: {e}")
+        
+        # Remove examples from project
+        remaining_examples = [ex for ex in image_examples if ex.get('label') != label]
+        
+        # Get current labels and keep the label even if no examples remain (for "Clear All" functionality)
+        current_labels = guest_project.get('dataset', {}).get('labels', [])
+        updated_labels = current_labels.copy()
+        
+        # For "Clear All" functionality, we want to keep the label even when empty
+        # Only remove the label if it's not in the current labels list
+        if label not in updated_labels:
+            updated_labels.append(label)
+            logger.info(f"Added label '{label}' to labels array to keep it as empty label")
+        
+        # Update project using ProjectService
+        from ...models import ProjectUpdate
+        project_update = ProjectUpdate(
+            dataset={
+                'image_examples': remaining_examples,
+                'labels': updated_labels
+            }
+        )
+        
+        await project_service.update_project(project_id, project_update)
+        
+        logger.info(f"Successfully deleted {len(examples_with_label)} image examples with label '{label}'")
+        
+        return {
+            "success": True,
+            "message": f"Successfully deleted {len(examples_with_label)} image examples with label '{label}'",
+            "project_id": project_id,
+            "label": label,
+            "examples_deleted": len(examples_with_label),
+            "gcs_deleted": deleted_count
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error deleting image examples by label: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete image examples: {str(e)}")
+
+
+@router.delete("/session/{session_id}/projects/{project_id}/images/{label}/{example_index}")
+async def delete_specific_image_example(
+    session_id: str,
+    project_id: str,
+    label: str,
+    example_index: int,
+    session: dict = Depends(validate_session_dependency),
+    guest_service: GuestService = Depends(get_guest_service),
+    project_service: ProjectService = Depends(get_project_service)
+):
+    """Delete a specific image example by index under a label for a guest project"""
+    try:
+        logger.info(f"Deleting specific image example {example_index} for label '{label}' in project {project_id}")
+        
+        # Get guest project
+        guest_project = await guest_service.get_guest_project_by_id(project_id)
+        if not guest_project:
+            raise HTTPException(status_code=404, detail="Guest project not found")
+        
+        # Verify project belongs to this session
+        if guest_project.get('createdBy') != f"guest:{session_id}":
+            raise HTTPException(status_code=404, detail="Project not found in this session")
+        
+        # Get image examples
+        image_examples = guest_project.get('dataset', {}).get('image_examples', [])
+        logger.info(f"Total image examples in project: {len(image_examples)}")
+        logger.info(f"All image examples: {[ex.get('label', 'NO_LABEL') + '/' + ex.get('filename', 'NO_FILENAME') for ex in image_examples]}")
+        
+        if not image_examples:
+            raise HTTPException(status_code=404, detail="No image examples found for this project")
+        
+        # Filter examples by label
+        examples_with_label = [ex for ex in image_examples if ex.get('label') == label]
+        logger.info(f"Found {len(examples_with_label)} examples with label '{label}'")
+        logger.info(f"Examples with label '{label}': {[ex.get('filename', 'NO_FILENAME') for ex in examples_with_label]}")
+        logger.info(f"Requested example index: {example_index}")
+        logger.info(f"Available indices: 0-{len(examples_with_label)-1}")
+        
+        if not examples_with_label:
+            raise HTTPException(status_code=404, detail=f"No image examples found with label '{label}'")
+        
+        # Validate example index
+        if example_index < 0 or example_index >= len(examples_with_label):
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Invalid example index. Valid range: 0-{len(examples_with_label)-1}"
+            )
+        
+        # Get the example to delete
+        example_to_delete = examples_with_label[example_index]
+        image_url = example_to_delete.get('image_url', '')
+        
+        # Delete image from GCS
+        gcs_deleted = False
+        if image_url and image_url.startswith('gs://'):
+            try:
+                # Parse GCS URL
+                url_parts = image_url[5:].split('/', 1)
+                bucket_name = url_parts[0]
+                blob_name = url_parts[1]
+                
+                # Delete from GCS
+                bucket = gcp_clients.get_bucket()
+                blob = bucket.blob(blob_name)
+                blob.delete()
+                gcs_deleted = True
+                logger.info(f"Deleted image from GCS: {blob_name}")
+            except Exception as e:
+                logger.warning(f"Failed to delete image from GCS {image_url}: {e}")
+        
+        # Remove the specific example from project
+        image_examples.remove(example_to_delete)
+        
+        # Get current labels and preserve them (including empty labels)
+        current_labels = guest_project.get('dataset', {}).get('labels', [])
+        
+        # Update project using ProjectService
+        from ...models import ProjectUpdate
+        project_update = ProjectUpdate(
+            dataset={
+                'image_examples': image_examples,
+                'labels': current_labels  # Preserve existing labels including empty ones
+            }
+        )
+        
+        await project_service.update_project(project_id, project_update)
+        
+        logger.info(f"Successfully deleted image example with label '{label}'")
+        
+        return {
+            "success": True,
+            "message": f"Successfully deleted image example with label '{label}'",
+            "project_id": project_id,
+            "label": label,
+            "example_index": example_index,
+            "gcs_deleted": gcs_deleted,
+            "examples_remaining": len(image_examples)
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error deleting specific image example: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete image example: {str(e)}")
+
+
+# ============================================================================
 # SESSION CLEANUP
 # ============================================================================
 
@@ -1943,7 +2786,7 @@ async def start_scratch_services(
         return {
             "success": True,
             "message": "Scratch services started successfully",
-            "gui_url": "http://localhost:8601",
+            "gui_url": "https://scratch-editor-uaaur7no2a-uc.a.run.app",
             "vm_url": "http://localhost:8602",
             "project_id": project_id,
             "session_id": session_id
@@ -1964,14 +2807,14 @@ async def start_all_scratch_services():
         return {
             "success": True,
             "message": "All Scratch services started successfully",
-            "gui_url": "http://localhost:8601",
+            "gui_url": "https://scratch-editor-uaaur7no2a-uc.a.run.app",
             "vm_url": "http://localhost:8602",
             "services": [
                 {
                     "name": "scratch-gui",
                     "status": "running",
                     "port": 8601,
-                    "url": "http://localhost:8601"
+                    "url": "https://scratch-editor-uaaur7no2a-uc.a.run.app"
                 },
                 {
                     "name": "scratch-vm",
@@ -2079,8 +2922,8 @@ async def train_guest_project(
             # Starting training process
             examples = await project_service.get_project_examples(project_id)
             
-            if len(examples) < 2:
-                raise HTTPException(status_code=400, detail="Need at least 2 examples to start training")
+            if len(examples) < 5:
+                raise HTTPException(status_code=400, detail="Need at least 5 examples to start training")
             
             # In a real implementation, you would start an async training job here
             # For now, we'll just return success

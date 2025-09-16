@@ -52,7 +52,7 @@ export const deleteSessionFromBackend = async (sessionId: string): Promise<boole
       try {
         const errorText = await response.text();
         console.log('Delete error details:', errorText);
-      } catch (e) {
+      } catch {
         console.log('Could not read delete error response');
       }
       
@@ -105,7 +105,7 @@ export const detectStorageCleared = (): boolean => {
     // If we had a session before but now localStorage is completely empty,
     // it might have been cleared
     return !hasSessionId && !hasCreatedTime && localStorage.length === 0;
-  } catch (error) {
+  } catch {
     // localStorage might not be available
     return false;
   }

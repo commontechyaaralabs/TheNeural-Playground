@@ -20,7 +20,6 @@ interface HeaderProps {
 export default function Header({
   className = '',
   logoSize = 'md',
-  navigationLinks,
   showMobileMenu = true,
   fixed = true,
   transparent = false,

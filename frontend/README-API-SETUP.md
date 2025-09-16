@@ -8,14 +8,15 @@ Create a `.env.local` file in the frontend directory with the following variable
 
 ```bash
 # Backend API URL (change this to match your backend)
-NEXT_PUBLIC_API_URL=http://localhost:8000
+NEXT_PUBLIC_API_URL=https://playgroundai-backend-uaaur7no2a-uc.a.run.app
 
 # Alternative backend URLs for different environments
 # NEXT_PUBLIC_API_URL=http://127.0.0.1:8000
-# NEXT_PUBLIC_API_URL=https://your-production-backend.com
+# NEXT_PUBLIC_API_URL=http://localhost:8080
 
 # Scratch Editor Configuration
-NEXT_PUBLIC_SCRATCH_EDITOR_URL=http://localhost:8601
+NEXT_PUBLIC_SCRATCH_EDITOR_URL=https://scratch-editor-uaaur7no2a-uc.a.run.app
+NEXT_PUBLIC_SCRATCH_VM_URL=https://scratch-editor-uaaur7no2a-uc.a.run.app
 ```
 
 ## API Service Usage

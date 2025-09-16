@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import Header from '../../components/Header';
 import config from '../../lib/config';
-import { generateMaskedId, storeMaskedIdMapping, getCurrentMaskedId, getSessionIdFromMaskedId } from '../../lib/session-utils';
+import { generateMaskedId, storeMaskedIdMapping, getCurrentMaskedId } from '../../lib/session-utils';
 
 interface GuestSession {
   session_id: string;

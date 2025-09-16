@@ -16,4 +16,4 @@ export const SCRATCH_EDITOR_CONFIG = {
 };
 
 // Export the current URL for direct use
-export const SCRATCH_EDITOR_URL = SCRATCH_EDITOR_CONFIG.PRODUCTION_URL;
+export const SCRATCH_EDITOR_URL = SCRATCH_EDITOR_CONFIG.getUrl();

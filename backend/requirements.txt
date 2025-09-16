@@ -25,12 +25,15 @@ scikit-learn>=1.4.0
 numpy>=1.26.0
 pandas>=2.1.0
 spacy[cpu]>=3.7.0
+tensorflow>=2.15.0
+Pillow>=10.0.0
 
 # Model Serialization
 joblib>=1.3.0
 
-# HTTP Client (for health checks)
+# HTTP Client (for health checks and URL downloads)
 requests>=2.31.0
+aiohttp>=3.9.0
 
 # Process Management (for Scratch services)
 psutil>=5.9.0
