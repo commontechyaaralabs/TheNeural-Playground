@@ -183,7 +183,7 @@ const GuestProjectManager: React.FC<GuestProjectManagerProps> = ({ sessionId }) 
         console.log('Validation state:', urlValidation);
         
         // ALWAYS validate Teachable Machine URL if required - no exceptions
-        if (formData.type === 'image-recognition-teachable-machine' && formData.teachable_machine_link) {
+        if ((formData.type === 'image-recognition-teachable-machine' || formData.type === 'pose-recognition-teachable-machine') && formData.teachable_machine_link) {
             console.log('Validating Teachable Machine URL...');
             
             // Always validate, regardless of previous state
@@ -247,7 +247,7 @@ const GuestProjectManager: React.FC<GuestProjectManagerProps> = ({ sessionId }) 
         setUrlValidation({ isValidating: false, isValid: null, error: null });
         
         // If editing a Teachable Machine project, validate the existing URL
-        if (project.type === 'image-recognition-teachable-machine' && project.teachable_machine_link) {
+        if ((project.type === 'image-recognition-teachable-machine' || project.type === 'pose-recognition-teachable-machine') && project.teachable_machine_link) {
             console.log('Validating existing Teachable Machine URL:', project.teachable_machine_link);
             validateTeachableMachineUrl(project.teachable_machine_link).then(isValid => {
                 setUrlValidation({ 
@@ -350,7 +350,7 @@ const GuestProjectManager: React.FC<GuestProjectManagerProps> = ({ sessionId }) 
                                 const newType = e.target.value;
                                 setFormData({ ...formData, type: newType });
                                 // Reset validation when changing project type
-                                if (newType !== 'image-recognition-teachable-machine') {
+                                if (newType !== 'image-recognition-teachable-machine' && newType !== 'pose-recognition-teachable-machine') {
                                     setUrlValidation({ isValidating: false, isValid: null, error: null });
                                 }
                             }}
@@ -359,13 +359,14 @@ const GuestProjectManager: React.FC<GuestProjectManagerProps> = ({ sessionId }) 
                             <option value="text-recognition">Text Recognition</option>
                             <option value="image-recognition">Image Recognition</option>
                             <option value="image-recognition-teachable-machine">Image Recognition - Teachable Machine</option>
+                            <option value="pose-recognition-teachable-machine">Pose Recognition - Teachable Machine</option>
                             <option value="classification">Classification</option>
                             <option value="regression">Regression</option>
                             <option value="custom">Custom</option>
                         </select>
                     </div>
                     
-                    {formData.type === 'image-recognition-teachable-machine' && (
+                    {(formData.type === 'image-recognition-teachable-machine' || formData.type === 'pose-recognition-teachable-machine') && (
                         <div>
                             <label className="block text-sm font-medium text-gray-700">Teachable Link</label>
                             <input
@@ -479,6 +480,7 @@ const GuestProjectManager: React.FC<GuestProjectManagerProps> = ({ sessionId }) 
                                         {project.type === 'text-recognition' ? 'Text Recognition' : 
                                          project.type === 'image-recognition' ? 'Image Recognition' :
                                          project.type === 'image-recognition-teachable-machine' ? 'Image Recognition - Teachable Machine' :
+                                         project.type === 'pose-recognition-teachable-machine' ? 'Pose Recognition - Teachable Machine' :
                                          project.type === 'classification' ? 'Classification' :
                                          project.type === 'regression' ? 'Regression' :
                                          project.type === 'custom' ? 'Custom' :

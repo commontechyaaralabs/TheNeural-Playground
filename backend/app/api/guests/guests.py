@@ -121,7 +121,7 @@ async def fix_project_types(session_id: str):
         for doc in docs:
             try:
                 data = doc.to_dict()
-                if 'type' in data and data['type'] not in ['text-recognition', 'image-recognition', 'image-recognition-teachable-machine', 'classification', 'regression', 'custom']:
+                if 'type' in data and data['type'] not in ['text-recognition', 'image-recognition', 'image-recognition-teachable-machine', 'pose-recognition-teachable-machine', 'classification', 'regression', 'custom']:
                     # Fix invalid type
                     old_type = data['type']
                     data['type'] = 'text-recognition'  # Default to text-recognition
@@ -282,9 +282,9 @@ async def create_guest_project(
 ):
     """Create a new project for a guest session
     
-    Supports both text-recognition and image-recognition-teachable-machine project types.
+    Supports text-recognition, image-recognition-teachable-machine, and pose-recognition-teachable-machine project types.
     
-    For image-recognition-teachable-machine projects:
+    For image-recognition-teachable-machine and pose-recognition-teachable-machine projects:
     - teachable_machine_link is required and must be a valid Teachable Machine URL
     - config field is ignored (not saved) since these projects use Teachable Machine models
     
@@ -312,14 +312,22 @@ async def create_guest_project(
         "type": "image-recognition-teachable-machine",
         "teachable_machine_link": "https://teachablemachine.withgoogle.com/models/abc123/"
     }
+    
+    Example request body for pose recognition:
+    {
+        "name": "Yoga Pose Classifier", 
+        "description": "Classify different yoga poses",
+        "type": "pose-recognition-teachable-machine",
+        "teachable_machine_link": "https://teachablemachine.withgoogle.com/models/xyz789/"
+    }
     """
     try:
         # Validate project type and teachable machine link
-        if project_data.type == "image-recognition-teachable-machine":
+        if project_data.type in ["image-recognition-teachable-machine", "pose-recognition-teachable-machine"]:
             if not project_data.teachable_machine_link:
                 raise HTTPException(
                     status_code=400, 
-                    detail="teachable_machine_link is required for image-recognition-teachable-machine projects"
+                    detail=f"teachable_machine_link is required for {project_data.type} projects"
                 )
             
             # Validate teachable machine link format
@@ -336,9 +344,9 @@ async def create_guest_project(
         project_data.classroom_id = ""
         project_data.student_id = session_id
         
-        # For image-recognition-teachable-machine projects, don't save config since they use Teachable Machine
-        # For regular image-recognition projects, use config like text recognition
-        if project_data.type == "image-recognition-teachable-machine":
+        # For teachable machine projects, don't save config since they use Teachable Machine
+        # For regular projects, use config like text recognition
+        if project_data.type in ["image-recognition-teachable-machine", "pose-recognition-teachable-machine"]:
             project_data.config = None
         
         project = await project_service.create_project(project_data)
@@ -398,8 +406,8 @@ async def update_guest_project(
             raise HTTPException(status_code=403, detail="Project not accessible for this session")
         
         # Validate project type and teachable machine link if being updated
-        if project_data.type == "image-recognition-teachable-machine" or (project_data.type is None and project.type == "image-recognition-teachable-machine"):
-            # If updating to image-recognition-teachable-machine or already is image-recognition-teachable-machine
+        if project_data.type in ["image-recognition-teachable-machine", "pose-recognition-teachable-machine"] or (project_data.type is None and project.type in ["image-recognition-teachable-machine", "pose-recognition-teachable-machine"]):
+            # If updating to teachable machine project or already is teachable machine project
             if project_data.teachable_machine_link is not None:
                 # Validate teachable machine link format if provided
                 if not project_data.teachable_machine_link.startswith("https://teachablemachine.withgoogle.com/"):
@@ -407,16 +415,16 @@ async def update_guest_project(
                         status_code=400,
                         detail="Invalid teachable machine link. Must be a valid Teachable Machine URL starting with 'https://teachablemachine.withgoogle.com/'"
                     )
-            elif project_data.type == "image-recognition-teachable-machine" and not project.teachable_machine_link:
-                # If changing to image-recognition-teachable-machine but no teachable machine link provided
+            elif project_data.type in ["image-recognition-teachable-machine", "pose-recognition-teachable-machine"] and not project.teachable_machine_link:
+                # If changing to teachable machine project but no teachable machine link provided
                 raise HTTPException(
                     status_code=400, 
-                    detail="teachable_machine_link is required for image-recognition-teachable-machine projects"
+                    detail=f"teachable_machine_link is required for {project_data.type} projects"
                 )
             
-            # For image-recognition-teachable-machine projects, don't save config
-            # For regular image-recognition projects, save config like text recognition
-            if project_data.type == "image-recognition-teachable-machine":
+            # For teachable machine projects, don't save config
+            # For regular projects, save config like text recognition
+            if project_data.type in ["image-recognition-teachable-machine", "pose-recognition-teachable-machine"]:
                 project_data.config = None
         
         # Update project

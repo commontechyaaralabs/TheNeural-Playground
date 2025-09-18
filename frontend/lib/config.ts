@@ -1,7 +1,7 @@
 // Configuration for the Neural Playground frontend - Updated for local development
 export const config = {
   // Backend API base URL
-  apiBaseUrl: process.env.NEXT_PUBLIC_API_URL || 'https://playgroundai-backend-uaaur7no2a-uc.a.run.app', // Backend running on Cloud Run
+  apiBaseUrl: process.env.NEXT_PUBLIC_API_URL || 'https://playgroundai-backend-uaaur7no2a-uc.a.run.app', // Production backend
   
   // Scratch Editor URLs
   scratchEditor: {

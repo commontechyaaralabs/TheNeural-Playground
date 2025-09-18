@@ -7,11 +7,11 @@ This document explains how to set up and use the API integration between the fro
 Create a `.env.local` file in the frontend directory with the following variables:
 
 ```bash
-# Backend API URL (change this to match your backend)
+# Backend API URL (production URLs)
 NEXT_PUBLIC_API_URL=https://playgroundai-backend-uaaur7no2a-uc.a.run.app
 
 # Alternative backend URLs for different environments
-# NEXT_PUBLIC_API_URL=http://127.0.0.1:8000
+# NEXT_PUBLIC_API_URL=http://127.0.0.1:8080
 # NEXT_PUBLIC_API_URL=http://localhost:8080
 
 # Scratch Editor Configuration
@@ -211,14 +211,16 @@ if (response.success) {
 
 The backend is configured to allow requests from:
 - `http://localhost:3000` (Next.js dev server)
-- `http://localhost:8601` (Scratch editor)
+- `https://scratch-editor-uaaur7no2a-uc.a.run.app` (Scratch editor)
 - `http://127.0.0.1:3000` (Loopback)
-- `http://127.0.0.1:8601` (Loopback)
+- `http://127.0.0.1:8080` (Backend API Loopback)
+- `http://127.0.0.1:8601` (Scratch Editor Loopback)
+- `http://127.0.0.1:8602` (Scratch VM Loopback)
 - `*` (All origins during development)
 
 ## Testing the Integration
 
-1. Start your backend server on port 8000
+1. Start your backend server on port 8080
 2. Start your frontend on port 3000
 3. Test API calls using the ProjectManager component
 4. Verify CORS is working correctly

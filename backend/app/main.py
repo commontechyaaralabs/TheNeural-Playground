@@ -30,10 +30,11 @@ app = FastAPI(
 origins = [
     "https://playground.theneural.in",   # Vercel Frontend
     "http://localhost:8601",     # Scratch Editor (local)
+    "http://localhost:8602",     # Scratch VM (local)
     "https://scratch-editor-uaaur7no2a-uc.a.run.app",  # Production Scratch Editor
     "https://playgroundai-backend-uaaur7no2a-uc.a.run.app",  # Backend URL
     "http://localhost:3000",   # Next.js dev server
-    "http://localhost:8601",   # Another frontend port if used
+    "http://localhost:8080",   # Backend API (local)
 ]
 
 # Add additional origins from environment variable if specified

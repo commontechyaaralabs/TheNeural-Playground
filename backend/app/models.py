@@ -80,6 +80,7 @@ class ProjectType(str, Enum):
     TEXT_RECOGNITION = "text-recognition"
     IMAGE_RECOGNITION = "image-recognition"
     IMAGE_RECOGNITION_TEACHABLE_MACHINE = "image-recognition-teachable-machine"
+    POSE_RECOGNITION_TEACHABLE_MACHINE = "pose-recognition-teachable-machine"
     CLASSIFICATION = "classification"
     REGRESSION = "regression"
     CUSTOM = "custom"

@@ -290,6 +290,7 @@ function CreateProjectPage() {
         },
         teachable_machine_link: projectData.teachable_machine_link || undefined
       };
+      
 
       const response = await fetch(`${config.apiBaseUrl}/api/guests/session/${sessionId}/projects`, {
         method: 'POST',
@@ -553,7 +554,12 @@ function CreateProjectPage() {
       setIsCreatingProject(true);
       
       // Validate Teachable Machine URL if required
-      if (projectType === 'image-recognition-teachable-machine' && teachableLink) {
+      if (projectType === 'image-recognition-teachable-machine' || projectType === 'pose-recognition-teachable-machine') {
+        if (!teachableLink || !teachableLink.trim()) {
+          alert('Teachable Machine link is required for this project type.');
+          setIsCreatingProject(false);
+          return;
+        }
         console.log('Validating Teachable Machine URL...');
         setUrlValidation({ isValidating: true, isValid: null, error: null });
         
@@ -583,13 +589,13 @@ function CreateProjectPage() {
           name: projectName.trim(),
           type: projectType,
           description: '',
-          teachable_machine_link: projectType === 'image-recognition-teachable-machine' ? teachableLink : undefined
+          teachable_machine_link: (projectType === 'image-recognition-teachable-machine' || projectType === 'pose-recognition-teachable-machine') ? teachableLink : undefined
         });
         
         console.log('Created project:', newProject);
         
-        // If it's an image recognition project, open Scratch editor
-        if (projectType === 'image-recognition-teachable-machine' && newProject.id) {
+        // If it's a teachable machine project, open Scratch editor
+        if ((projectType === 'image-recognition-teachable-machine' || projectType === 'pose-recognition-teachable-machine') && newProject.id) {
           const scratchUrl = `${config.scratchEditor.gui}?sessionId=${actualSessionId}&projectId=${newProject.id}&teachableLink=${encodeURIComponent(teachableLink)}`;
           window.open(scratchUrl, '_blank');
         }
@@ -605,8 +611,8 @@ function CreateProjectPage() {
           await loadGuestProjects(actualSessionId);
         }
         
-        // For image recognition projects, stay on projects list
-        if (projectType === 'image-recognition-teachable-machine') {
+        // For teachable machine projects, stay on projects list
+        if (projectType === 'image-recognition-teachable-machine' || projectType === 'pose-recognition-teachable-machine') {
           setCurrentSection('projects-list');
           window.location.hash = '';
         } else {
@@ -633,7 +639,7 @@ function CreateProjectPage() {
       setIsUpdatingProject(true);
       
       // Validate Teachable Machine URL if required
-      if (editingProject.type === 'image-recognition-teachable-machine' && teachableLink) {
+      if ((editingProject.type === 'image-recognition-teachable-machine' || editingProject.type === 'pose-recognition-teachable-machine') && teachableLink) {
         console.log('Validating Teachable Machine URL for update...');
         setUrlValidation({ isValidating: true, isValid: null, error: null });
         
@@ -661,7 +667,7 @@ function CreateProjectPage() {
       try {
         await updateGuestProject(editingProject.maskedId || editingProject.id, {
           name: projectName.trim(),
-          teachable_machine_link: editingProject.type === 'image-recognition-teachable-machine' ? teachableLink : undefined
+          teachable_machine_link: (editingProject.type === 'image-recognition-teachable-machine' || editingProject.type === 'pose-recognition-teachable-machine') ? teachableLink : undefined
         });
         
         // Reset form
@@ -731,8 +737,8 @@ function CreateProjectPage() {
   // };
 
   const handleProjectClick = (project: Project) => {
-    // For both image recognition and text recognition projects, don't redirect - let the Launch button handle it
-    if (project.type === 'image-recognition-teachable-machine' || project.type === 'text-recognition' || project.type === 'image-recognition') {
+    // For teachable machine and text recognition projects, don't redirect - let the Launch button handle it
+    if (project.type === 'image-recognition-teachable-machine' || project.type === 'pose-recognition-teachable-machine' || project.type === 'text-recognition' || project.type === 'image-recognition') {
       return;
     } else {
       // For other project types, navigate to the project-specific page using masked project ID
@@ -742,13 +748,14 @@ function CreateProjectPage() {
   };
 
   const handleLaunchProject = (project: Project) => {
-    if (project.type === 'image-recognition-teachable-machine') {
+    if (project.type === 'image-recognition-teachable-machine' || project.type === 'pose-recognition-teachable-machine') {
       if (project.teachable_machine_link) {
         const scratchUrl = `${config.scratchEditor.gui}?sessionId=${actualSessionId}&projectId=${project.id}&teachableLink=${encodeURIComponent(project.teachable_machine_link)}`;
         window.open(scratchUrl, '_blank');
       } else {
         // If no teachable machine link, show an alert or redirect to edit the project
-        alert('This image recognition project needs a Teachable Machine link. Please edit the project to add one.');
+        const projectTypeName = project.type === 'image-recognition-teachable-machine' ? 'image recognition' : 'pose recognition';
+        alert(`This ${projectTypeName} project needs a Teachable Machine link. Please edit the project to add one.`);
         // Optionally, you could open the edit modal here
         // handleEditProject(project);
       }
@@ -1017,8 +1024,8 @@ function CreateProjectPage() {
                         {project.name}
                       </h3>
                       <div className="flex gap-2 ml-4">
-                        {/* Edit Button - Only for image recognition projects */}
-                        {project.type === 'image-recognition-teachable-machine' && (
+                        {/* Edit Button - Only for teachable machine projects */}
+                        {(project.type === 'image-recognition-teachable-machine' || project.type === 'pose-recognition-teachable-machine') && (
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
@@ -1074,6 +1081,7 @@ function CreateProjectPage() {
                          {project.type === 'text-recognition' ? 'Text Recognition' : 
                           project.type === 'image-recognition' ? 'Image Recognition' :
                           project.type === 'image-recognition-teachable-machine' ? 'Image Recognition - Teachable Machine' :
+                          project.type === 'pose-recognition-teachable-machine' ? 'Pose Recognition - Teachable Machine' :
                           project.type === 'classification' ? 'Classification' :
                           project.type === 'regression' ? 'Regression' :
                           project.type === 'custom' ? 'Custom' :
@@ -1093,8 +1101,8 @@ function CreateProjectPage() {
                        </div>
                      )}
                     
-                    {/* Teachable Machine Link - Only show for image recognition projects */}
-                    {project.type === 'image-recognition-teachable-machine' && project.teachable_machine_link && (
+                    {/* Teachable Machine Link - Only show for teachable machine projects */}
+                    {(project.type === 'image-recognition-teachable-machine' || project.type === 'pose-recognition-teachable-machine') && project.teachable_machine_link && (
                       <div className="text-white mb-4">
                         <span className="text-sm">Teachable Link: </span>
                         <a 
@@ -1116,8 +1124,8 @@ function CreateProjectPage() {
                     
                                                               {/* Launch Button and Date Info in Parallel */}
                      <div className={`mt-4 flex items-start justify-between gap-4 ${project.type === 'text-recognition' || project.type === 'image-recognition' ? 'mt-16' : ''}`}>
-                       {/* Launch Button - For image recognition and text recognition projects */}
-                       {project.type === 'image-recognition-teachable-machine' || project.type === 'text-recognition' || project.type === 'image-recognition' ? (
+                       {/* Launch Button - For teachable machine and text recognition projects */}
+                       {project.type === 'image-recognition-teachable-machine' || project.type === 'pose-recognition-teachable-machine' || project.type === 'text-recognition' || project.type === 'image-recognition' ? (
                          <button
                            onClick={(e) => {
                              e.stopPropagation();
@@ -1198,11 +1206,14 @@ function CreateProjectPage() {
                     <option value="image-recognition-teachable-machine" className="bg-[#1c1c1c] text-white">
                       Image Recognition - Teachable Machine
                     </option>
+                    <option value="pose-recognition-teachable-machine" className="bg-[#1c1c1c] text-white">
+                      Pose Recognition - Teachable Machine
+                    </option>
                   </select>
                 </div>
 
-                {/* Teachable Link Field - Only show for Image Recognition */}
-                {projectType === 'image-recognition-teachable-machine' && (
+                {/* Teachable Link Field - Only show for Image Recognition and Pose Recognition */}
+                {(projectType === 'image-recognition-teachable-machine' || projectType === 'pose-recognition-teachable-machine') && (
                   <div>
                     <label htmlFor="teachableLink" className="block text-sm font-medium text-white mb-2">
                       Teachable Link
@@ -1322,12 +1333,15 @@ function CreateProjectPage() {
                     <option value="image-recognition-teachable-machine" className="bg-[#1c1c1c] text-white">
                       Image Recognition - Teachable Machine
                     </option>
+                    <option value="pose-recognition-teachable-machine" className="bg-[#1c1c1c] text-white">
+                      Pose Recognition - Teachable Machine
+                    </option>
                   </select>
                   <p className="text-xs text-white/50 mt-1">Project type cannot be changed</p>
                 </div>
 
-                {/* Teachable Link Field - Only show for Image Recognition */}
-                {projectType === 'image-recognition-teachable-machine' && (
+                {/* Teachable Link Field - Only show for teachable machine projects */}
+                {(projectType === 'image-recognition-teachable-machine' || projectType === 'pose-recognition-teachable-machine') && (
                   <div>
                     <label htmlFor="editTeachableLink" className="block text-sm font-medium text-white mb-2">
                       Teachable Link
