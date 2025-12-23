@@ -478,7 +478,7 @@ export default function MakePage() {
       <Header />
 
       <main className="pt-24 pb-20 px-4 sm:px-6 lg:px-8">
-        <div className="max-w-7xl mx-auto">
+        <div>
           {/* Back to Project Navigation */}
           <div className="flex items-center mb-8">
             <a

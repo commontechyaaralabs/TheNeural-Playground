@@ -11,6 +11,7 @@ import os
 from .config import settings
 from .api import projects, health, teachers, students, classrooms, demo_projects, scratch_services
 from .api.guests import router as guests_router
+from .api import agents, knowledge, rules, chat, internal
 from .training_worker import training_worker
 
 # Configure logging
@@ -112,6 +113,13 @@ app.include_router(classrooms.router)
 app.include_router(demo_projects.router)
 app.include_router(guests_router)
 app.include_router(scratch_services.router)
+
+# Agent Creation API routers
+app.include_router(agents.router)
+app.include_router(knowledge.router)
+app.include_router(rules.router)
+app.include_router(chat.router)
+app.include_router(internal.router)
 
 # Add explicit OPTIONS handler for CORS preflight
 @app.options("/{full_path:path}")

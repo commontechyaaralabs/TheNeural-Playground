@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     # Security
     jwt_secret: str = Field(default="your-super-secret-jwt-key-here", env="JWT_SECRET")
     
+    # Google Custom Search API (for image search)
+    google_api_key: Optional[str] = Field(default=None, env="GOOGLE_API_KEY")
+    google_cse_id: Optional[str] = Field(default=None, env="GOOGLE_CSE_ID")
+    
     class Config:
         env_file = ".env"
 

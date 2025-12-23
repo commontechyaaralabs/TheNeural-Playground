@@ -63,6 +63,7 @@ interface Project {
   status?: string;
   maskedId?: string;
   teachable_machine_link?: string;  // Changed from teachable_link to teachable_machine_link to match backend
+  agent_id?: string;  // For Custom AI Agent projects
   modelStatus?: 'available' | 'unavailable';  // Model training status
 }
 
@@ -72,6 +73,7 @@ function CreateProjectPage() {
   const [projectName, setProjectName] = useState('');
   const [projectType, setProjectType] = useState('');
   const [teachableLink, setTeachableLink] = useState('');
+  const [agentDescription, setAgentDescription] = useState('');
   const [projects, setProjects] = useState<Project[]>([]);
   const [currentSection, setCurrentSection] = useState<'projects-list' | 'new-project' | 'project-details' | 'edit-project'>('projects-list');
   const [selectedProject] = useState<Project | null>(null);
@@ -210,51 +212,75 @@ function CreateProjectPage() {
 
   const loadGuestProjects = async (sessionId: string) => {
     try {
-      const response = await fetch(`${config.apiBaseUrl}/api/guests/session/${sessionId}/projects`);
+      // Fetch both projects and agents
+      const [projectsResponse, agentsResponse] = await Promise.all([
+        fetch(`${config.apiBaseUrl}/api/guests/session/${sessionId}/projects`),
+        fetch(`${config.apiBaseUrl}${config.api.agents.list(sessionId)}`).catch(() => null) // Optional, don't fail if endpoint doesn't exist
+      ]);
       
-      if (response.ok) {
-        const projectsResponse = await response.json();
-        if (projectsResponse.success && projectsResponse.data) {
-          // Generate and store masked IDs for each project
-          const projectsWithMaskedIds = (projectsResponse.data as Project[]).map((project: Project) => {
+      const allProjects: Project[] = [];
+      
+      // Load regular projects
+      if (projectsResponse.ok) {
+        const projectsData = await projectsResponse.json();
+        if (projectsData.success && projectsData.data) {
+          const projectsWithMaskedIds = (projectsData.data as Project[]).map((project: Project) => {
             const maskedProjectId = generateMaskedProjectId(project.id);
-            
-            // Check if mapping already exists
             const existingId = getProjectIdFromMaskedId(maskedProjectId);
             if (!existingId) {
               storeMaskedProjectIdMapping(maskedProjectId, project.id);
             }
-            
             return {
               ...project,
               maskedId: maskedProjectId
             };
           });
-          
-          // Load model status for each project in parallel
-          const projectsWithStatus = await Promise.all(
-            projectsWithMaskedIds.map(async (project) => {
-              // Only fetch model status for text recognition and image recognition projects
-              if (project.type === 'text-recognition' || project.type === 'image-recognition') {
-                const modelStatus = await getProjectModelStatus(project.maskedId || project.id);
-                return {
-                  ...project,
-                  modelStatus
-                };
-              }
-              return project;
-            })
-          );
-          
-          setProjects(projectsWithStatus);
-        } else {
-          // No projects found or empty response
-          setProjects([]);
+          allProjects.push(...projectsWithMaskedIds);
         }
-      } else {
-        console.error('Failed to load projects:', response.status);
-        setProjects([]);
       }
+      
+      // Load agents (if endpoint exists)
+      if (agentsResponse && agentsResponse.ok) {
+        const agentsData = await agentsResponse.json();
+        if (agentsData && Array.isArray(agentsData) && agentsData.length > 0) {
+          const agentsAsProjects = agentsData.map((agent: any) => {
+            const maskedProjectId = generateMaskedProjectId(agent.agent_id);
+            const existingId = getProjectIdFromMaskedId(maskedProjectId);
+            if (!existingId) {
+              storeMaskedProjectIdMapping(maskedProjectId, agent.agent_id);
+            }
+            return {
+              id: agent.agent_id,
+              name: agent.name,
+              type: 'custom-ai-agent',
+              description: agent.description,
+              status: agent.active ? 'draft' : 'failed',
+              createdAt: agent.created_at,
+              updatedAt: agent.updated_at,
+              maskedId: maskedProjectId,
+              agent_id: agent.agent_id
+            } as Project;
+          });
+          allProjects.push(...agentsAsProjects);
+        }
+      }
+      
+      // Load model status for each project in parallel
+      const projectsWithStatus = await Promise.all(
+        allProjects.map(async (project) => {
+          // Only fetch model status for text recognition and image recognition projects
+          if (project.type === 'text-recognition' || project.type === 'image-recognition') {
+            const modelStatus = await getProjectModelStatus(project.maskedId || project.id);
+            return {
+              ...project,
+              modelStatus
+            };
+          }
+          return project;
+        })
+      );
+      
+      setProjects(projectsWithStatus);
     } catch (error) {
       console.error('Error loading projects:', error);
       setProjects([]);
@@ -553,6 +579,15 @@ function CreateProjectPage() {
     if (projectName.trim() && projectType) {
       setIsCreatingProject(true);
       
+      // Validate agent description if Custom AI Agent
+      if (projectType === 'custom-ai-agent') {
+        if (!agentDescription || !agentDescription.trim()) {
+          alert('Agent description is required for Custom AI Agent.');
+          setIsCreatingProject(false);
+          return;
+        }
+      }
+      
       // Validate Teachable Machine URL if required
       if (projectType === 'image-recognition-teachable-machine' || projectType === 'pose-recognition-teachable-machine') {
         if (!teachableLink || !teachableLink.trim()) {
@@ -585,12 +620,63 @@ function CreateProjectPage() {
       }
       
       try {
-        const newProject = await createGuestProject({
-          name: projectName.trim(),
-          type: projectType,
-          description: '',
-          teachable_machine_link: (projectType === 'image-recognition-teachable-machine' || projectType === 'pose-recognition-teachable-machine') ? teachableLink : undefined
-        });
+        let newProject;
+        
+        // Handle Custom AI Agent creation differently
+        if (projectType === 'custom-ai-agent') {
+          // Get session ID from localStorage
+          const sessionId = localStorage.getItem('neural_playground_session_id');
+          if (!sessionId) {
+            throw new Error('No session found');
+          }
+          
+          // Create agent using agent API
+          const agentResponse = await fetch(`${config.apiBaseUrl}${config.api.agents.create}`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              session_id: sessionId,
+              agent_description: agentDescription.trim()
+            }),
+          });
+          
+          if (!agentResponse.ok) {
+            const errorData = await agentResponse.json();
+            throw new Error(errorData.detail || 'Failed to create agent');
+          }
+          
+          const agentData = await agentResponse.json();
+          if (!agentData.success) {
+            throw new Error('Failed to create agent');
+          }
+          
+          // Create a project-like object from agent data
+          const agent = agentData.data;
+          const maskedProjectId = generateMaskedProjectId(agent.agent_id);
+          storeMaskedProjectIdMapping(maskedProjectId, agent.agent_id);
+          
+          newProject = {
+            id: agent.agent_id,
+            name: agent.name,
+            type: 'custom-ai-agent',
+            description: agent.description,
+            status: 'draft',
+            createdAt: agent.created_at,
+            updatedAt: agent.updated_at,
+            maskedId: maskedProjectId,
+            agent_id: agent.agent_id
+          };
+        } else {
+          // Regular project creation
+          newProject = await createGuestProject({
+            name: projectName.trim(),
+            type: projectType,
+            description: '',
+            teachable_machine_link: (projectType === 'image-recognition-teachable-machine' || projectType === 'pose-recognition-teachable-machine') ? teachableLink : undefined
+          });
+        }
         
         console.log('Created project:', newProject);
         
@@ -616,7 +702,7 @@ function CreateProjectPage() {
           setCurrentSection('projects-list');
           window.location.hash = '';
         } else {
-          // For other project types, navigate to project details page
+          // For other project types (including custom-ai-agent), navigate to project details page
           window.location.href = `/projects/${urlParam}/${newProject.maskedId}`;
         }
       } catch (error: unknown) {
@@ -699,7 +785,7 @@ function CreateProjectPage() {
     }
   };
 
-  const handleDeleteProject = async (projectId: string) => {
+  const handleDeleteProject = async (projectId: string, projectType?: string) => {
     if (actualSessionId && confirm('Are you sure you want to delete this project?')) {
       try {
         // If it's a masked ID, get the real project ID
@@ -711,16 +797,35 @@ function CreateProjectPage() {
           }
         }
 
-        const response = await fetch(`${config.apiBaseUrl}/api/guests/session/${actualSessionId}/projects/${realProjectId}`, {
-          method: 'DELETE',
-        });
+        let response;
+        
+        // Check if it's an agent (custom-ai-agent type or ID starts with AGENT_)
+        const isAgent = projectType === 'custom-ai-agent' || realProjectId.startsWith('AGENT_');
+        
+        if (isAgent) {
+          // Use agent delete API
+          response = await fetch(`${config.apiBaseUrl}${config.api.agents.delete(realProjectId, actualSessionId)}`, {
+            method: 'DELETE',
+          });
+        } else {
+          // Use regular project delete API
+          response = await fetch(`${config.apiBaseUrl}/api/guests/session/${actualSessionId}/projects/${realProjectId}`, {
+            method: 'DELETE',
+          });
+        }
 
         if (response.ok) {
-          // Reload projects to get updated list
+          // Immediately remove the deleted project from local state for instant UI update
+          setProjects(prevProjects => 
+            prevProjects.filter(p => p.id !== realProjectId && p.maskedId !== projectId)
+          );
+          
+          // Also reload from API to ensure sync (this will set isLoadingProjects to false when done)
           setIsLoadingProjects(true);
           await loadGuestProjects(actualSessionId);
         } else {
-          alert('Failed to delete project. Please try again.');
+          const errorData = await response.json().catch(() => ({}));
+          alert(errorData.detail || 'Failed to delete project. Please try again.');
         }
       } catch (error) {
         console.error('Error deleting project:', error);
@@ -741,7 +846,7 @@ function CreateProjectPage() {
     if (project.type === 'image-recognition-teachable-machine' || project.type === 'pose-recognition-teachable-machine' || project.type === 'text-recognition' || project.type === 'image-recognition') {
       return;
     } else {
-      // For other project types, navigate to the project-specific page using masked project ID
+      // For other project types (including custom-ai-agent), navigate to the project-specific page using masked project ID
       const projectId = project.maskedId || project.id;
       window.location.href = `/projects/${urlParam}/${projectId}`;
     }
@@ -759,8 +864,8 @@ function CreateProjectPage() {
         // Optionally, you could open the edit modal here
         // handleEditProject(project);
       }
-    } else if (project.type === 'text-recognition' || project.type === 'image-recognition') {
-      // Navigate to the project-specific page for text recognition and image recognition
+    } else if (project.type === 'text-recognition' || project.type === 'image-recognition' || project.type === 'custom-ai-agent') {
+      // Navigate to the project-specific page for text recognition, image recognition, and custom AI agent
       const projectId = project.maskedId || project.id;
       window.location.href = `/projects/${urlParam}/${projectId}`;
     }
@@ -776,6 +881,7 @@ function CreateProjectPage() {
     setProjectName('');
     setProjectType('');
     setTeachableLink('');
+    setAgentDescription('');
     setEditingProject(null);
     // Reset validation state when canceling
     setUrlValidation({ isValidating: false, isValid: null, error: null });
@@ -791,7 +897,7 @@ function CreateProjectPage() {
 
       {/* Main Content */}
       <main className="pt-24 pb-20 px-4 sm:px-6 lg:px-8">
-        <div className="max-w-7xl mx-auto">
+        <div>
           {/* Back to Home Button */}
           <div className="flex justify-start mb-8">
             <Link
@@ -806,7 +912,8 @@ function CreateProjectPage() {
           </div>
           
           {/* Navigation Breadcrumb */}
-                      <div className="mb-6 text-lg font-semibold text-white">
+          <div className="mb-6 flex items-center justify-between">
+            <div className="text-lg font-semibold text-white">
               {currentSection === 'projects-list' && (
                 <span>Projects List</span>
               )}
@@ -816,10 +923,29 @@ function CreateProjectPage() {
               {currentSection === 'edit-project' && (
                 <span>Projects List → <span className="text-[#dcfc84]">Edit Project</span></span>
               )}
-
-
-
             </div>
+            {currentSection === 'projects-list' && projects.length > 0 && (
+              <button
+                onClick={handleCreateProject}
+                className="bg-[#dcfc84] text-[#1c1c1c] px-6 py-3 rounded-lg hover:bg-[#dcfc84]/90 transition-all duration-300 inline-flex items-center gap-2 font-medium"
+              >
+                <svg 
+                  className="w-5 h-5" 
+                  fill="none" 
+                  stroke="currentColor" 
+                  viewBox="0 0 24 24"
+                >
+                  <path 
+                    strokeLinecap="round" 
+                    strokeLinejoin="round" 
+                    strokeWidth={2} 
+                    d="M12 6v6m0 0v6m0-6h6m-6 0H6" 
+                  />
+                </svg>
+                Add a new project
+              </button>
+            )}
+          </div>
           {isLoading ? (
             /* Loading State */
             <div className="flex items-center justify-center min-h-[400px]">
@@ -873,51 +999,114 @@ function CreateProjectPage() {
               </div>
 
               {/* ML Action Cards */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-8 max-w-6xl mx-auto">
-                {/* Train Card */}
-                <div className="bg-[#1c1c1c] border border-[#bc6cd3]/20 rounded-xl p-8 text-center hover:bg-[#bc6cd3]/5 transition-all duration-300">
-                  <h2 className="text-2xl md:text-3xl font-bold text-white mb-6">
-                    Train
-                  </h2>
-                  <p className="text-white mb-8 text-sm md:text-base leading-relaxed min-h-[3rem]">
-                    Collect examples of what you want the computer to recognise
-                  </p>
-                                     <button 
-                     onClick={() => {
-                       const projectId = selectedProject.maskedId || selectedProject.id;
-                       window.location.href = `/projects/${urlParam}/${projectId}/train`;
-                     }}
-                     className="w-full bg-[#dcfc84] hover:bg-[#dcfc84]/90 text-[#1c1c1c] py-3 px-6 rounded-lg font-medium transition-all duration-300"
-                   >
-                     Train
-                   </button>
-                </div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+                {selectedProject.type === 'custom-ai-agent' ? (
+                  <>
+                    {/* BUILD Card - For Custom AI Agent */}
+                    <div className="bg-[#1c1c1c] border border-[#bc6cd3]/20 rounded-xl p-8 text-center hover:bg-[#bc6cd3]/5 transition-all duration-300">
+                      <h2 className="text-2xl md:text-3xl font-bold text-white mb-6">
+                        BUILD
+                      </h2>
+                      <p className="text-white mb-8 text-sm md:text-base leading-relaxed min-h-[3rem]">
+                        Add knowledge base (text, files, links, Q&A) and create rules for your AI agent
+                      </p>
+                      <button 
+                        onClick={() => {
+                          const projectId = selectedProject.maskedId || selectedProject.id;
+                          window.location.href = `/projects/${urlParam}/${projectId}/build`;
+                        }}
+                        className="w-full bg-[#dcfc84] hover:bg-[#dcfc84]/90 text-[#1c1c1c] py-3 px-6 rounded-lg font-medium transition-all duration-300"
+                      >
+                        BUILD
+                      </button>
+                    </div>
 
-                {/* Learn & Test Card */}
-                <div className="bg-[#1c1c1c] border border-[#bc6cd3]/20 rounded-xl p-8 text-center hover:bg-[#bc6cd3]/5 transition-all duration-300">
-                  <h2 className="text-2xl md:text-3xl font-bold text-white mb-6">
-                    Learn & Test
-                  </h2>
-                  <p className="text-white mb-8 text-sm md:text-base leading-relaxed min-h-[3rem]">
-                    Use the examples to train the computer to recognise text
-                  </p>
-                  <button className="w-full bg-[#dcfc84] hover:bg-[#dcfc84]/90 text-[#1c1c1c] py-3 px-6 rounded-lg font-medium transition-all duration-300">
-                    Learn & Test
-                  </button>
-                </div>
+                    {/* TRAIN Card - For Custom AI Agent */}
+                    <div className="bg-[#1c1c1c] border border-[#bc6cd3]/20 rounded-xl p-8 text-center hover:bg-[#bc6cd3]/5 transition-all duration-300">
+                      <h2 className="text-2xl md:text-3xl font-bold text-white mb-6">
+                        TRAIN
+                      </h2>
+                      <p className="text-white mb-8 text-sm md:text-base leading-relaxed min-h-[3rem]">
+                        Teach your agent from chat conversations to improve its responses
+                      </p>
+                      <button 
+                        onClick={() => {
+                          const projectId = selectedProject.maskedId || selectedProject.id;
+                          window.location.href = `/projects/${urlParam}/${projectId}/train`;
+                        }}
+                        className="w-full bg-[#dcfc84] hover:bg-[#dcfc84]/90 text-[#1c1c1c] py-3 px-6 rounded-lg font-medium transition-all duration-300"
+                      >
+                        TRAIN
+                      </button>
+                    </div>
 
-                {/* Make Card */}
-                <div className="bg-[#1c1c1c] border border-[#bc6cd3]/20 rounded-xl p-8 text-center hover:bg-[#bc6cd3]/5 transition-all duration-300">
-                  <h2 className="text-2xl md:text-3xl font-bold text-white mb-6">
-                    Make
-                  </h2>
-                  <p className="text-white mb-8 text-sm md:text-base leading-relaxed min-h-[3rem]">
-                    Use the machine learning model you&apos;ve trained to make a game or app, in Scratch, Python, or EduBlocks
-                  </p>
-                  <button className="w-full bg-[#dcfc84] hover:bg-[#dcfc84]/90 text-[#1c1c1c] py-3 px-6 rounded-lg font-medium transition-all duration-300">
-                    Make
-                  </button>
-                </div>
+                    {/* Use AI Card - For Custom AI Agent */}
+                    <div className="bg-[#1c1c1c] border border-[#bc6cd3]/20 rounded-xl p-8 text-center hover:bg-[#bc6cd3]/5 transition-all duration-300">
+                      <h2 className="text-2xl md:text-3xl font-bold text-white mb-6">
+                        Use AI
+                      </h2>
+                      <p className="text-white mb-8 text-sm md:text-base leading-relaxed min-h-[3rem]">
+                        Chat with your AI agent and see it respond using knowledge base and rules
+                      </p>
+                      <button 
+                        onClick={() => {
+                          const projectId = selectedProject.maskedId || selectedProject.id;
+                          window.location.href = `/projects/${urlParam}/${projectId}/use-ai`;
+                        }}
+                        className="w-full bg-[#dcfc84] hover:bg-[#dcfc84]/90 text-[#1c1c1c] py-3 px-6 rounded-lg font-medium transition-all duration-300"
+                      >
+                        Use AI
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    {/* Train Card */}
+                    <div className="bg-[#1c1c1c] border border-[#bc6cd3]/20 rounded-xl p-8 text-center hover:bg-[#bc6cd3]/5 transition-all duration-300">
+                      <h2 className="text-2xl md:text-3xl font-bold text-white mb-6">
+                        Train
+                      </h2>
+                      <p className="text-white mb-8 text-sm md:text-base leading-relaxed min-h-[3rem]">
+                        Collect examples of what you want the computer to recognise
+                      </p>
+                      <button 
+                        onClick={() => {
+                          const projectId = selectedProject.maskedId || selectedProject.id;
+                          window.location.href = `/projects/${urlParam}/${projectId}/train`;
+                        }}
+                        className="w-full bg-[#dcfc84] hover:bg-[#dcfc84]/90 text-[#1c1c1c] py-3 px-6 rounded-lg font-medium transition-all duration-300"
+                      >
+                        Train
+                      </button>
+                    </div>
+
+                    {/* Learn & Test Card */}
+                    <div className="bg-[#1c1c1c] border border-[#bc6cd3]/20 rounded-xl p-8 text-center hover:bg-[#bc6cd3]/5 transition-all duration-300">
+                      <h2 className="text-2xl md:text-3xl font-bold text-white mb-6">
+                        Learn & Test
+                      </h2>
+                      <p className="text-white mb-8 text-sm md:text-base leading-relaxed min-h-[3rem]">
+                        Use the examples to train the computer to recognise text
+                      </p>
+                      <button className="w-full bg-[#dcfc84] hover:bg-[#dcfc84]/90 text-[#1c1c1c] py-3 px-6 rounded-lg font-medium transition-all duration-300">
+                        Learn & Test
+                      </button>
+                    </div>
+
+                    {/* Make Card */}
+                    <div className="bg-[#1c1c1c] border border-[#bc6cd3]/20 rounded-xl p-8 text-center hover:bg-[#bc6cd3]/5 transition-all duration-300">
+                      <h2 className="text-2xl md:text-3xl font-bold text-white mb-6">
+                        Make
+                      </h2>
+                      <p className="text-white mb-8 text-sm md:text-base leading-relaxed min-h-[3rem]">
+                        Use the machine learning model you&apos;ve trained to make a game or app, in Scratch, Python, or EduBlocks
+                      </p>
+                      <button className="w-full bg-[#dcfc84] hover:bg-[#dcfc84]/90 text-[#1c1c1c] py-3 px-6 rounded-lg font-medium transition-all duration-300">
+                        Make
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
 
@@ -984,31 +1173,6 @@ function CreateProjectPage() {
           ) : currentSection === 'projects-list' && projects.length > 0 ? (
             /* Projects Grid */
             <div>
-              {/* Header with Add Project Button */}
-              <div className="flex justify-end items-center mb-8">
-                <button
-                  onClick={handleCreateProject}
-                  className="bg-[#1c1c1c] border border-[#bc6cd3]/20 text-white px-6 py-3 rounded-lg hover:bg-[#bc6cd3]/10 transition-all duration-300 inline-flex items-center gap-2"
-                >
-                  <svg 
-                    className="w-5 h-5" 
-                    fill="none" 
-                    stroke="currentColor" 
-                    viewBox="0 0 24 24"
-                  >
-                    <path 
-                      strokeLinecap="round" 
-                      strokeLinejoin="round" 
-                      strokeWidth={2} 
-                      d="M12 6v6m0 0v6m0-6h6m-6 0H6" 
-                    />
-                  </svg>
-                  Add a new project
-                </button>
-              </div>
-
-              
-
               {/* Projects Grid */}
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {projects.map((project) => (
@@ -1053,7 +1217,7 @@ function CreateProjectPage() {
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
-                            handleDeleteProject(project.maskedId || project.id);
+                            handleDeleteProject(project.maskedId || project.id, project.type);
                           }}
                           className="p-2 text-white/70 hover:text-red-400 hover:bg-white/10 rounded-lg transition-all duration-300"
                           title="Delete project"
@@ -1209,8 +1373,29 @@ function CreateProjectPage() {
                     <option value="pose-recognition-teachable-machine" className="bg-[#1c1c1c] text-white">
                       Pose Recognition - Teachable Machine
                     </option>
+                    <option value="custom-ai-agent" className="bg-[#1c1c1c] text-white">
+                      Custom AI Agent
+                    </option>
                   </select>
                 </div>
+
+                {/* Agent Description Field - Only show for Custom AI Agent */}
+                {projectType === 'custom-ai-agent' && (
+                  <div>
+                    <label htmlFor="agentDescription" className="block text-sm font-medium text-white mb-2">
+                      Agent Description
+                    </label>
+                    <textarea
+                      id="agentDescription"
+                      value={agentDescription}
+                      onChange={(e) => setAgentDescription(e.target.value)}
+                      placeholder="Describe your AI agent (e.g., Create a customer support assistant that helps users with product inquiries)"
+                      rows={4}
+                      className="w-full h-40 px-4 py-3 bg-[#1c1c1c] border border-[#bc6cd3]/20 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:border-[#dcfc84] focus:ring-1 focus:ring-[#dcfc84] transition-all duration-300 resize-none"
+                      required
+                    />
+                  </div>
+                )}
 
                 {/* Teachable Link Field - Only show for Image Recognition and Pose Recognition */}
                 {(projectType === 'image-recognition-teachable-machine' || projectType === 'pose-recognition-teachable-machine') && (
@@ -1269,7 +1454,7 @@ function CreateProjectPage() {
                 )}
 
                 {/* Form Buttons */}
-                <div className="flex gap-4 pt-4">
+                <div className="flex gap-4">
                   <button
                     type="button"
                     onClick={handleCancel}

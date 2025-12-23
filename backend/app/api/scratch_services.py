@@ -245,8 +245,8 @@ async def start_all_services(background_tasks: BackgroundTasks):
             "success": True,
             "message": "All Scratch services started successfully",
             "status": status,
-            "gui_url": "https://scratch-editor-uaaur7no2a-uc.a.run.app",
-            "vm_url": "https://scratch-editor-uaaur7no2a-uc.a.run.app"
+            "gui_url": "http://localhost:8601",
+            "vm_url": "http://localhost:8602"
         }
         
     except Exception as e:

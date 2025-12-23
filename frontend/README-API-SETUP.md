@@ -7,16 +7,16 @@ This document explains how to set up and use the API integration between the fro
 Create a `.env.local` file in the frontend directory with the following variables:
 
 ```bash
-# Backend API URL (production URLs)
-NEXT_PUBLIC_API_URL=https://playgroundai-backend-uaaur7no2a-uc.a.run.app
+# Backend API URL (change this to match your backend)
+NEXT_PUBLIC_API_URL=http://localhost:8080
 
 # Alternative backend URLs for different environments
 # NEXT_PUBLIC_API_URL=http://127.0.0.1:8080
 # NEXT_PUBLIC_API_URL=http://localhost:8080
 
 # Scratch Editor Configuration
-NEXT_PUBLIC_SCRATCH_EDITOR_URL=https://scratch-editor-uaaur7no2a-uc.a.run.app
-NEXT_PUBLIC_SCRATCH_VM_URL=https://scratch-editor-uaaur7no2a-uc.a.run.app
+NEXT_PUBLIC_SCRATCH_EDITOR_URL=http://localhost:8601
+NEXT_PUBLIC_SCRATCH_VM_URL=http://localhost:8602
 ```
 
 ## API Service Usage
@@ -211,7 +211,7 @@ if (response.success) {
 
 The backend is configured to allow requests from:
 - `http://localhost:3000` (Next.js dev server)
-- `https://scratch-editor-uaaur7no2a-uc.a.run.app` (Scratch editor)
+- `http://localhost:8601` (Scratch editor)
 - `http://127.0.0.1:3000` (Loopback)
 - `http://127.0.0.1:8080` (Backend API Loopback)
 - `http://127.0.0.1:8601` (Scratch Editor Loopback)

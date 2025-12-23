@@ -16,7 +16,7 @@ from ...models import (
 )
 from ...services.guest_service import GuestService
 from ...services.project_service import ProjectService
-from ...training_service import trainer
+from ...training_service import trainer, distilbert_trainer
 from ...image_training_service import image_trainer
 from ...training_job_service import training_job_service
 from ...config import gcp_clients
@@ -1141,7 +1141,7 @@ async def _train_text_recognition_project(
     session_id: str, project_id: str, guest_project: dict, 
     training_config: Optional[TrainingConfig], guest_service: GuestService
 ) -> TrainingResponse:
-    """Train text recognition project using logistic regression"""
+    """Train text recognition project using DistilBERT (default) or Logistic Regression"""
     try:
         # Get examples for training from guest project
         examples = guest_project.get('dataset', {}).get('examples', [])
@@ -1178,18 +1178,69 @@ async def _train_text_recognition_project(
             logger.info(f"Training with {len(training_examples)} examples")
             logger.info(f"Example labels: {[ex.label for ex in training_examples]}")
             
-            # Try direct training first (for debugging)
-            try:
-                logger.info("Attempting direct text training...")
+            # Use DistilBERT by default (better accuracy for text classification)
+            use_distilbert = True  # Can be made configurable later
+            
+            if use_distilbert:
+                logger.info("🤖 Using DistilBERT for text classification")
+                try:
+                    training_result = distilbert_trainer.train_model(training_examples)
+                    logger.info(f"DistilBERT training successful: {training_result}")
+                    
+                    # Save DistilBERT model to GCS (directory structure)
+                    model_path = f"models/{project_id}"  # Directory path for Hugging Face format
+                    
+                    logger.info(f"Saving DistilBERT model to GCS: {model_path}")
+                    distilbert_trainer.save_model_to_gcs(
+                        gcp_clients.get_bucket(), 
+                        model_path, 
+                        training_result['model'],
+                        training_result['tokenizer']
+                    )
+                    logger.info("DistilBERT model saved to GCS successfully")
+                    
+                    # Update guest project with model info and status
+                    model_update = {
+                        'model.filename': 'distilbert_model',  # Directory name
+                        'model.gcsPath': model_path,  # Directory path
+                        'model.accuracy': training_result.get('accuracy'),
+                        'model.loss': None,  # DistilBERT doesn't use loss in same way
+                        'model.labels': training_result.get('labels', []),
+                        'model.modelType': 'distilbert',
+                        'model.trainedAt': datetime.now(timezone.utc).isoformat(),
+                        'model.endpointUrl': f"/api/guests/session/{session_id}/projects/{project_id}/predict",
+                        'status': 'trained',
+                        'updatedAt': datetime.now(timezone.utc).isoformat()
+                    }
+                    
+                    # Update the project document
+                    project_doc_ref = guest_service.projects_collection.document(project_id)
+                    project_doc_ref.update(model_update)
+                    
+                    logger.info(f"Guest project {project_id} updated with DistilBERT model info")
+                    
+                    # Return success response for DistilBERT
+                    return TrainingResponse(
+                        success=True,
+                        message="Training completed successfully with DistilBERT!",
+                        jobId=f"direct-{project_id}-{int(datetime.now().timestamp())}"
+                    )
+                    
+                except Exception as distilbert_error:
+                    logger.warning(f"DistilBERT training failed: {distilbert_error}, falling back to Logistic Regression")
+                    use_distilbert = False
+            
+            if not use_distilbert:
+                # Fallback to Logistic Regression
+                logger.info("📊 Using Logistic Regression for text classification")
                 training_result = trainer.train_model(training_examples)
-                logger.info(f"Direct training successful: {training_result}")
+                logger.info(f"Logistic Regression training successful: {training_result}")
                 
                 # Save the trained model to GCS
                 model_filename = f"model_{project_id}.pkl"
                 model_path = f"models/{project_id}/{model_filename}"
                 
                 logger.info(f"Saving model to GCS: {model_path}")
-                # Save the complete trained pipeline to GCS
                 trainer.save_model_to_gcs(gcp_clients.get_bucket(), model_path, training_result['model'])
                 logger.info("Model saved to GCS successfully")
                 
@@ -1220,29 +1271,29 @@ async def _train_text_recognition_project(
                     jobId=f"direct-{project_id}-{int(datetime.now().timestamp())}"
                 )
                 
-            except Exception as training_error:
-                logger.error(f"Direct training failed: {training_error}")
-                logger.error(f"Training error type: {type(training_error)}")
-                logger.error(f"Training error details: {str(training_error)}")
-                
-                # Fall back to worker-based training
-                logger.info("Falling back to worker-based training")
-                
-                config_dict = training_config.model_dump() if training_config else None
-                training_job = await training_job_service.create_training_job(project_id, config_dict)
-                
-                # Update guest session with job ID and status
-                await guest_service.update_guest_session(session_id, GuestUpdate(
-                    currentJobId=training_job.id,
-                    training_status="training",
-                    status="training"
-                ))
-                
-                return TrainingResponse(
-                    success=True,
-                    message="Training job queued successfully!",
-                    jobId=training_job.id
-                )
+        except Exception as training_error:
+            logger.error(f"Direct training failed: {training_error}")
+            logger.error(f"Training error type: {type(training_error)}")
+            logger.error(f"Training error details: {str(training_error)}")
+            
+            # Fall back to worker-based training
+            logger.info("Falling back to worker-based training")
+            
+            config_dict = training_config.model_dump() if training_config else None
+            training_job = await training_job_service.create_training_job(project_id, config_dict)
+            
+            # Update guest session with job ID and status
+            await guest_service.update_guest_session(session_id, GuestUpdate(
+                currentJobId=training_job.id,
+                training_status="training",
+                status="training"
+            ))
+            
+            return TrainingResponse(
+                success=True,
+                message="Training job queued successfully!",
+                jobId=training_job.id
+            )
             
         except ValueError as e:
             # Training validation failed
@@ -1496,8 +1547,24 @@ async def predict_guest_text(
                     } for prob in prediction_result['all_probabilities'][:2]  # Top 2 alternatives
                 ]
             )
+        elif model_type == 'distilbert':
+            # Handle DistilBERT text recognition
+            logger.info(f"Using DistilBERT for prediction")
+            prediction_result = distilbert_trainer.predict_from_gcs(
+                prediction_request.text,
+                gcp_clients.get_bucket(),
+                model_gcs_path
+            )
+            
+            return PredictionResponse(
+                success=True,
+                label=prediction_result['label'],
+                confidence=prediction_result['confidence'],
+                alternatives=prediction_result['alternatives']
+            )
         else:
-            # Handle text recognition (existing logic)
+            # Handle Logistic Regression text recognition (fallback)
+            logger.info(f"Using Logistic Regression for prediction")
             prediction_result = trainer.predict_from_gcs(
                 prediction_request.text,
                 gcp_clients.get_bucket(),
@@ -2794,8 +2861,8 @@ async def start_scratch_services(
         return {
             "success": True,
             "message": "Scratch services started successfully",
-            "gui_url": "https://scratch-editor-uaaur7no2a-uc.a.run.app",
-            "vm_url": "https://scratch-editor-uaaur7no2a-uc.a.run.app",
+            "gui_url": "http://localhost:8601",
+            "vm_url": "http://localhost:8602",
             "project_id": project_id,
             "session_id": session_id
         }
@@ -2815,20 +2882,20 @@ async def start_all_scratch_services():
         return {
             "success": True,
             "message": "All Scratch services started successfully",
-            "gui_url": "https://scratch-editor-uaaur7no2a-uc.a.run.app",
-            "vm_url": "https://scratch-editor-uaaur7no2a-uc.a.run.app",
+            "gui_url": "http://localhost:8601",
+            "vm_url": "http://localhost:8602",
             "services": [
                 {
                     "name": "scratch-gui",
                     "status": "running",
                     "port": 8601,
-                    "url": "https://scratch-editor-uaaur7no2a-uc.a.run.app"
+                    "url": "http://localhost:8601"
                 },
                 {
                     "name": "scratch-vm",
                     "status": "running", 
                     "port": 8602,
-                    "url": "https://scratch-editor-uaaur7no2a-uc.a.run.app"
+                    "url": "http://localhost:8602"
                 }
             ]
         }

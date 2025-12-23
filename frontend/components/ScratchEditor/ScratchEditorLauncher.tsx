@@ -220,7 +220,7 @@ export default function ScratchEditorLauncher({
       <Header />
       
       <main className="pt-24 pb-20 px-4 sm:px-6 lg:px-8">
-        <div className="max-w-7xl mx-auto">
+        <div>
           {/* Header with project info */}
           <div className="flex items-center justify-between mb-6">
             <div>

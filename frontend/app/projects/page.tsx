@@ -165,7 +165,7 @@ export default function ProjectsPage() {
 
       {/* Main Content */}
       <main className="pt-24 pb-20 px-4 sm:px-6 lg:px-8">
-        <div className="max-w-4xl mx-auto">
+        <div>
           {/* Back Button */}
           <div className="flex justify-start mb-8">
             <Link
@@ -234,7 +234,7 @@ export default function ProjectsPage() {
 
       {/* Footer */}
       <footer className="bg-[#1c1c1c] border-t border-[#bc6cd3]/20 py-8 px-4 sm:px-6 lg:px-8">
-        <div className="max-w-7xl mx-auto text-center">
+        <div className="text-center">
           <p className="text-sm text-white">
             © 2024 TheNeural Playground. Empowering the next generation of AI creators.
           </p>

@@ -573,3 +573,401 @@ class EnhancedLogisticRegressionTrainer:
 
 # Global trainer instance - MAINTAIN OLD API COMPATIBILITY
 trainer = EnhancedLogisticRegressionTrainer()
+
+
+# ============================================================================
+# DISTILBERT TRAINER - Enhanced Text Classification with Transformers
+# ============================================================================
+
+class DistilBERTTrainer:
+    """DistilBERT-based text classification trainer with same interface as Logistic Regression"""
+    
+    def __init__(self):
+        self.model = None
+        self.tokenizer = None
+        self.class_names = []
+        self.label_to_id = {}
+        self.id_to_label = {}
+        self.training_texts = []
+        self.training_labels = []
+        self.is_trained = False
+        
+    def validate_dataset(self, examples: List[TextExample]) -> Tuple[bool, str]:
+        """Validate dataset for training"""
+        if not examples or len(examples) < 2:
+            return False, "Need at least 2 examples for training"
+        
+        labels = [ex.label for ex in examples]
+        unique_labels = set(labels)
+        
+        if len(unique_labels) < 2:
+            return False, "Need at least 2 different labels for classification"
+        
+        # Check minimum examples per label (5 as per requirement)
+        label_counts = {label: labels.count(label) for label in unique_labels}
+        min_count = min(label_counts.values())
+        if min_count < 5:
+            return False, f"Each label needs at least 5 examples. Minimum found: {min_count}"
+        
+        return True, "Dataset is valid"
+    
+    def train_model(self, examples: List[TextExample]) -> Dict[str, Any]:
+        """Train DistilBERT model on text examples"""
+        try:
+            logger.info("🚀 Starting DistilBERT model training...")
+            logger.info(f"📊 Training with {len(examples)} examples")
+            
+            # Validate dataset
+            logger.info("🔍 Validating dataset...")
+            is_valid, validation_message = self.validate_dataset(examples)
+            if not is_valid:
+                raise ValueError(validation_message)
+            logger.info("✅ Dataset validation passed")
+            
+            # Extract texts and labels
+            texts = [ex.text for ex in examples]
+            labels = [ex.label for ex in examples]
+            
+            # Store training data for exact match checking
+            self.training_texts = texts[:]
+            self.training_labels = labels[:]
+            
+            # Get unique labels and create mappings
+            self.class_names = sorted(list(set(labels)))
+            self.label_to_id = {label: idx for idx, label in enumerate(self.class_names)}
+            self.id_to_label = {idx: label for label, idx in self.label_to_id.items()}
+            num_labels = len(self.class_names)
+            
+            logger.info(f"📋 Found {num_labels} classes: {self.class_names}")
+            
+            # Import transformers
+            from transformers import (
+                AutoTokenizer, 
+                AutoModelForSequenceClassification,
+                TrainingArguments,
+                Trainer,
+                DataCollatorWithPadding
+            )
+            from torch.utils.data import Dataset
+            import torch
+            
+            # Load tokenizer and model
+            logger.info("📥 Loading DistilBERT tokenizer and model...")
+            model_name = "distilbert-base-uncased"
+            self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+            self.model = AutoModelForSequenceClassification.from_pretrained(
+                model_name,
+                num_labels=num_labels
+            )
+            logger.info("✅ DistilBERT model loaded successfully")
+            
+            # Create dataset class
+            class TextDataset(Dataset):
+                def __init__(self, texts, labels, tokenizer, label_to_id):
+                    self.texts = texts
+                    self.labels = [label_to_id[label] for label in labels]
+                    self.tokenizer = tokenizer
+                
+                def __len__(self):
+                    return len(self.texts)
+                
+                def __getitem__(self, idx):
+                    text = str(self.texts[idx])
+                    label = self.labels[idx]
+                    encoding = self.tokenizer(
+                        text,
+                        truncation=True,
+                        padding='max_length',
+                        max_length=128,
+                        return_tensors='pt'
+                    )
+                    return {
+                        'input_ids': encoding['input_ids'].flatten(),
+                        'attention_mask': encoding['attention_mask'].flatten(),
+                        'labels': torch.tensor(label, dtype=torch.long)
+                    }
+            
+            # Create datasets
+            train_dataset = TextDataset(texts, labels, self.tokenizer, self.label_to_id)
+            
+            # Training arguments - optimized for small datasets
+            training_args = TrainingArguments(
+                output_dir='./distilbert_results',
+                num_train_epochs=10,  # More epochs for small datasets
+                per_device_train_batch_size=4,  # Small batch size for small datasets
+                learning_rate=2e-5,
+                weight_decay=0.01,
+                logging_dir='./logs',
+                logging_steps=10,
+                save_strategy='no',  # Don't save checkpoints
+                eval_strategy='no',  # No validation split (changed from evaluation_strategy)
+                load_best_model_at_end=False,
+            )
+            
+            # Data collator
+            data_collator = DataCollatorWithPadding(tokenizer=self.tokenizer)
+            
+            # Create trainer
+            trainer = Trainer(
+                model=self.model,
+                args=training_args,
+                train_dataset=train_dataset,
+                data_collator=data_collator,
+            )
+            
+            # Train model
+            logger.info("🎯 Training DistilBERT model...")
+            trainer.train()
+            logger.info("✅ Training complete!")
+            
+            # Evaluate on training data
+            logger.info("📊 Evaluating model on training data...")
+            self.model.eval()
+            correct = 0
+            total = 0
+            
+            with torch.no_grad():
+                for item in train_dataset:
+                    input_ids = item['input_ids'].unsqueeze(0)
+                    attention_mask = item['attention_mask'].unsqueeze(0)
+                    label = item['labels'].item()
+                    
+                    outputs = self.model(input_ids=input_ids, attention_mask=attention_mask)
+                    predicted = torch.argmax(outputs.logits, dim=-1).item()
+                    
+                    if predicted == label:
+                        correct += 1
+                    total += 1
+            
+            accuracy = correct / total if total > 0 else 0.0
+            logger.info(f"✅ Training accuracy: {accuracy:.4f}")
+            
+            # Mark as trained
+            self.is_trained = True
+            
+            # Return result in same format as Logistic Regression
+            result = {
+                'accuracy': accuracy,
+                'labels': self.class_names,
+                'training_examples': len(texts),
+                'total_features': self.model.config.vocab_size,
+                'model': self.model,  # Return the trained model
+                'tokenizer': self.tokenizer  # Also return tokenizer
+            }
+            
+            logger.info("🎉 DistilBERT training completed successfully!")
+            return result
+            
+        except Exception as e:
+            logger.error(f"❌ DistilBERT training failed: {e}")
+            import traceback
+            traceback.print_exc()
+            raise Exception(f"DistilBERT model training failed: {str(e)}")
+    
+    def save_model_to_gcs(self, bucket, gcs_path: str, trained_model, tokenizer) -> str:
+        """Save DistilBERT model to GCS using Hugging Face save_pretrained format"""
+        import tempfile
+        import os
+        import json
+        
+        try:
+            if trained_model is None or tokenizer is None:
+                raise ValueError("Trained model and tokenizer are required")
+            
+            # Hugging Face requires local file path, so we use temp dir as staging area
+            # All files are immediately uploaded to GCS cloud storage
+            temp_dir = tempfile.mkdtemp()
+            try:
+                logger.info(f"📦 Staging model files locally (required by Hugging Face), uploading to cloud immediately...")
+                
+                # Save model and tokenizer using Hugging Face format (requires local path)
+                try:
+                    trained_model.save_pretrained(temp_dir, safe_serialization=True)
+                    logger.info("✅ Model staged locally")
+                except Exception as model_save_error:
+                    logger.error(f"❌ Error staging model: {model_save_error}")
+                    raise
+                
+                try:
+                    tokenizer.save_pretrained(temp_dir)
+                    logger.info("✅ Tokenizer staged locally")
+                except Exception as tokenizer_save_error:
+                    logger.error(f"❌ Error staging tokenizer: {tokenizer_save_error}")
+                    raise
+                
+                # Save metadata to memory (will upload directly to cloud)
+                metadata = {
+                    'class_names': self.class_names,
+                    'label_to_id': self.label_to_id,
+                    'id_to_label': self.id_to_label,
+                    'training_texts': self.training_texts,
+                    'training_labels': self.training_labels,
+                    'trained_at': datetime.now(timezone.utc).isoformat(),
+                    'model_type': 'distilbert'
+                }
+                
+                # Save metadata temporarily for upload
+                metadata_path = os.path.join(temp_dir, 'metadata.json')
+                with open(metadata_path, 'w') as f:
+                    json.dump(metadata, f, indent=2)
+                
+                # Upload all files directly to GCS cloud storage
+                logger.info(f"☁️ Uploading all files directly to cloud storage: {gcs_path}")
+                uploaded_files = []
+                
+                for root, dirs, files in os.walk(temp_dir):
+                    for file in files:
+                        local_path = os.path.join(root, file)
+                        # Read file content and upload directly to cloud
+                        with open(local_path, 'rb') as f:
+                            file_content = f.read()
+                        
+                        # Get relative path from temp_dir
+                        rel_path = os.path.relpath(local_path, temp_dir)
+                        # Use forward slashes for GCS
+                        gcs_file_path = f"{gcs_path}/{rel_path}".replace('\\', '/')
+                        
+                        # Upload directly to cloud storage
+                        blob = bucket.blob(gcs_file_path)
+                        blob.upload_from_string(file_content)
+                        uploaded_files.append(gcs_file_path)
+                        logger.info(f"  ☁️ Uploaded to cloud: {gcs_file_path}")
+                
+                logger.info(f"✅ All files saved to cloud storage ({len(uploaded_files)} files)")
+                
+                return gcs_path
+            except Exception as upload_error:
+                logger.error(f"❌ Error during upload to cloud: {upload_error}")
+                raise
+            finally:
+                # Immediately clean up temporary staging directory (everything is now in cloud)
+                import shutil
+                try:
+                    if os.path.exists(temp_dir):
+                        shutil.rmtree(temp_dir, ignore_errors=True)
+                        logger.info(f"🧹 Removed temporary staging directory (all files in cloud)")
+                except Exception as cleanup_error:
+                    logger.warning(f"⚠️ Failed to clean up temp directory: {cleanup_error}")
+                
+        except Exception as e:
+            logger.error(f"❌ Failed to save DistilBERT model to GCS: {e}")
+            import traceback
+            logger.error(f"Full traceback: {traceback.format_exc()}")
+            raise Exception(f"Failed to save DistilBERT model: {str(e)}")
+    
+    def predict_from_gcs(self, text: str, bucket, gcs_path: str) -> Dict[str, Any]:
+        """Make prediction using DistilBERT model stored in GCS"""
+        import tempfile
+        import os
+        import json
+        import torch
+        from transformers import AutoTokenizer, AutoModelForSequenceClassification
+        
+        try:
+            # Create temporary directory for downloading model
+            with tempfile.TemporaryDirectory() as temp_dir:
+                logger.info(f"📥 Downloading DistilBERT model from GCS: {gcs_path}")
+                
+                # List all files in the GCS directory
+                blobs = bucket.list_blobs(prefix=gcs_path)
+                downloaded_files = []
+                
+                for blob in blobs:
+                    # Get relative path
+                    rel_path = blob.name.replace(gcs_path + '/', '')
+                    if rel_path:  # Skip if it's the directory itself
+                        local_path = os.path.join(temp_dir, rel_path)
+                        # Create directory if needed
+                        os.makedirs(os.path.dirname(local_path), exist_ok=True)
+                        # Download file
+                        blob.download_to_filename(local_path)
+                        downloaded_files.append(rel_path)
+                        logger.info(f"  ✅ Downloaded: {rel_path}")
+                
+                if not downloaded_files:
+                    raise ValueError(f"No model files found in GCS path: {gcs_path}")
+                
+                # Load metadata
+                metadata_path = os.path.join(temp_dir, 'metadata.json')
+                if os.path.exists(metadata_path):
+                    with open(metadata_path, 'r') as f:
+                        metadata = json.load(f)
+                    class_names = metadata.get('class_names', [])
+                    training_texts = metadata.get('training_texts', [])
+                    training_labels = metadata.get('training_labels', [])
+                    id_to_label = metadata.get('id_to_label', {})
+                else:
+                    raise ValueError("metadata.json not found in model directory")
+                
+                # Check for exact match in training data
+                processed_text = text.lower().strip()
+                if training_texts and training_labels:
+                    for i, training_text in enumerate(training_texts):
+                        if processed_text == training_text.lower().strip():
+                            exact_label = training_labels[i]
+                            return {
+                                'label': exact_label,
+                                'confidence': 100.0,  # 100% confidence for exact matches
+                                'alternatives': []
+                            }
+                
+                # Load model and tokenizer
+                logger.info("🔄 Loading DistilBERT model and tokenizer...")
+                self.tokenizer = AutoTokenizer.from_pretrained(temp_dir)
+                self.model = AutoModelForSequenceClassification.from_pretrained(temp_dir)
+                self.model.eval()
+                logger.info("✅ Model loaded successfully")
+                
+                # Tokenize input text
+                inputs = self.tokenizer(
+                    text,
+                    truncation=True,
+                    padding='max_length',
+                    max_length=128,
+                    return_tensors='pt'
+                )
+                
+                # Make prediction
+                with torch.no_grad():
+                    outputs = self.model(**inputs)
+                    logits = outputs.logits
+                    
+                    # Apply softmax to get probabilities
+                    probabilities = torch.nn.functional.softmax(logits, dim=-1)[0]
+                    probabilities_np = probabilities.cpu().numpy()
+                
+                # Get predicted class
+                predicted_id = int(torch.argmax(probabilities, dim=-1).item())
+                predicted_label = id_to_label.get(predicted_id, class_names[predicted_id] if predicted_id < len(class_names) else 'unknown')
+                
+                # Calculate confidence (same as Logistic Regression: max probability * 100)
+                confidence = float(probabilities_np[predicted_id]) * 100
+                
+                # Get alternatives (all other classes)
+                alternatives = []
+                for i, prob in enumerate(probabilities_np):
+                    if i != predicted_id:
+                        label = id_to_label.get(i, class_names[i] if i < len(class_names) else f'class_{i}')
+                        alternatives.append({
+                            'label': label,
+                            'confidence': round(float(prob) * 100, 2)
+                        })
+                
+                # Sort alternatives by confidence
+                alternatives.sort(key=lambda x: x['confidence'], reverse=True)
+                
+                return {
+                    'label': predicted_label,
+                    'confidence': round(confidence, 2),
+                    'alternatives': alternatives[:2]  # Top 2 alternatives
+                }
+                
+        except Exception as e:
+            logger.error(f"❌ Failed to load/predict with DistilBERT model: {e}")
+            import traceback
+            traceback.print_exc()
+            raise Exception(f"Failed to load/predict with DistilBERT model: {str(e)}")
+
+
+# Global DistilBERT trainer instance
+distilbert_trainer = DistilBERTTrainer()

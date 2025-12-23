@@ -1236,7 +1236,7 @@ export default function LearnPage() {
       <div className="min-h-screen bg-[#1c1c1c] text-white">
         <Header />
         <main className="pt-24 pb-20 px-4 sm:px-6 lg:px-8">
-          <div className="max-w-7xl mx-auto">
+          <div>
             <div className="flex items-center justify-center min-h-[400px]">
               <div className="text-center">
                 <div className="w-16 h-16 border-4 border-[#bc6cd3]/20 border-t-[#dcfc84] rounded-full animate-spin mx-auto mb-4"></div>
@@ -1280,7 +1280,7 @@ export default function LearnPage() {
       <Header />
 
       <main className="pt-24 pb-20 px-4 sm:px-6 lg:px-8">
-        <div className="max-w-7xl mx-auto">
+        <div>
           {/* Back to Project Link */}
           <div className="mb-6">
             <Link

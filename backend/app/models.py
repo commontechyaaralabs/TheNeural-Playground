@@ -427,3 +427,183 @@ class GuestSession(BaseModel):
 class GuestSessionResponse(BaseModel):
     success: bool = True
     data: GuestSession
+
+# Agent Creation API Models
+class Agent(BaseModel):
+    agent_id: str = Field(..., description="Unique agent identifier")
+    user_id: str = Field(..., description="User ID who created the agent")
+    session_id: str = Field(..., description="Session ID")
+    name: str = Field(..., description="Agent name")
+    role: str = Field(..., description="Agent role")
+    tone: str = Field(..., description="Agent tone")
+    language: str = Field(..., description="Agent language")
+    description: str = Field(..., description="Agent description")
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    active: bool = Field(True, description="Whether agent is active")
+
+class Persona(BaseModel):
+    agent_id: str = Field(..., description="Agent ID this persona belongs to")
+    name: str = Field(..., description="Persona name")
+    role: str = Field(..., description="Persona role")
+    tone: str = Field(..., description="Persona tone")
+    language: str = Field("English", description="Persona language")
+    response_length: str = Field("short", description="Response length: minimal, short, long, chatty")
+    guidelines: str = Field("", description="Custom chat guidelines")
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class PersonaUpdateRequest(BaseModel):
+    name: Optional[str] = Field(None, description="Persona name")
+    role: Optional[str] = Field(None, description="Persona role")
+    tone: Optional[str] = Field(None, description="Persona tone (friendly, professional, casual)")
+    language: Optional[str] = Field(None, description="Persona language")
+    response_length: Optional[str] = Field(None, description="Response length: minimal, short, long, chatty")
+    guidelines: Optional[str] = Field(None, description="Custom chat guidelines")
+
+class PersonaUpdateResponse(BaseModel):
+    success: bool = True
+    persona: Persona
+    message: str = "Persona updated successfully"
+
+class KnowledgeType(str, Enum):
+    TEXT = "text"
+    FILE = "file"
+    LINK = "link"
+    QNA = "qna"
+
+class Knowledge(BaseModel):
+    knowledge_id: str = Field(..., description="Unique knowledge identifier")
+    agent_id: str = Field(..., description="Agent ID this knowledge belongs to")
+    type: KnowledgeType = Field(..., description="Knowledge type")
+    content: str = Field(..., description="Knowledge content")
+    embedding: Optional[List[float]] = Field(None, description="Embedding vector")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
+    priority: int = Field(1, description="Priority (higher = more important)")
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class RuleCondition(BaseModel):
+    type: str = Field(..., description="Condition type: keyword, intent, sentiment")
+    value: Union[str, Dict[str, Any]] = Field(..., description="Condition value")
+
+class RuleAction(BaseModel):
+    type: str = Field(..., description="Action type: respond, redirect, etc.")
+    value: Union[str, Dict[str, Any]] = Field(..., description="Action value")
+
+class Rule(BaseModel):
+    rule_id: str = Field(..., description="Unique rule identifier")
+    agent_id: str = Field(..., description="Agent ID this rule belongs to")
+    name: str = Field(..., description="Rule name")
+    when: RuleCondition = Field(..., description="WHEN condition")
+    do: RuleAction = Field(..., description="DO action")
+    priority: int = Field(1, description="Rule priority (higher = evaluated first)")
+    active: bool = Field(True, description="Whether rule is active")
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class ChatLog(BaseModel):
+    chat_id: str = Field(..., description="Unique chat log identifier")
+    agent_id: str = Field(..., description="Agent ID")
+    user_id: str = Field(..., description="User ID")
+    session_id: str = Field(..., description="Session ID")
+    message: str = Field(..., description="User message")
+    response: str = Field(..., description="Agent response")
+    conditions_detected: List[Dict[str, Any]] = Field(default_factory=list, description="Conditions detected")
+    rule_matched: Optional[str] = Field(None, description="Rule ID if rule matched")
+    kb_used: List[str] = Field(default_factory=list, description="Knowledge IDs used")
+    llm_used: bool = Field(True, description="Whether LLM was used")
+    trace: Dict[str, Any] = Field(default_factory=dict, description="Full trace data")
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+# Request/Response Models
+class AgentCreateRequest(BaseModel):
+    session_id: str = Field(..., description="Session ID")
+    agent_description: str = Field(..., description="Free-text description of the agent")
+    user_id: Optional[str] = Field(None, description="User ID (optional, defaults to session_id if not provided)")
+
+class AgentCreateResponse(BaseModel):
+    success: bool = True
+    data: Agent
+
+class KnowledgeTextRequest(BaseModel):
+    agent_id: str = Field(..., description="Agent ID")
+    session_id: Optional[str] = Field(None, description="Session ID for traceability")
+    content: str = Field(..., description="Text content")
+
+class KnowledgeFileRequest(BaseModel):
+    """Request model for file upload (used with form data, not JSON body)"""
+    agent_id: str = Field(..., description="Agent ID")
+    session_id: Optional[str] = Field(None, description="Session ID for traceability")
+    # Note: file is handled separately via FastAPI's UploadFile
+
+class KnowledgeFileResponse(BaseModel):
+    """Response model for file KB upload"""
+    success: bool = True
+    knowledge_ids: List[str] = Field(..., description="List of created knowledge chunk IDs")
+    chunks_added: int = Field(..., description="Number of chunks created")
+    file_name: str = Field(..., description="Uploaded file name")
+    file_type: str = Field(..., description="File type (pdf, xlsx, csv, txt)")
+    file_url: str = Field(..., description="GCS URL of uploaded file")
+    extracted_chars: int = Field(..., description="Number of characters extracted")
+    message: str = Field(..., description="Status message")
+
+class KnowledgeLinkRequest(BaseModel):
+    agent_id: str = Field(..., description="Agent ID")
+    session_id: Optional[str] = Field(None, description="Session ID for traceability")
+    url: str = Field(..., description="URL to fetch")
+
+class KnowledgeQnARequest(BaseModel):
+    agent_id: str = Field(..., description="Agent ID")
+    question: str = Field(..., description="Question")
+    answer: str = Field(..., description="Answer")
+
+class KnowledgeResponse(BaseModel):
+    success: bool = True
+    knowledge_id: str
+    message: str
+
+class RuleSaveRequest(BaseModel):
+    agent_id: str = Field(..., description="Agent ID")
+    name: str = Field(..., description="Rule name")
+    when: RuleCondition = Field(..., description="WHEN condition")
+    do: RuleAction = Field(..., description="DO action")
+    priority: int = Field(1, description="Rule priority")
+
+class RuleResponse(BaseModel):
+    success: bool = True
+    data: Rule
+
+class RuleListResponse(BaseModel):
+    success: bool = True
+    data: List[Rule]
+
+class ChatRequest(BaseModel):
+    agent_id: str = Field(..., description="Agent ID")
+    session_id: str = Field(..., description="Session ID")
+    message: str = Field(..., description="User message")
+    user_id: Optional[str] = Field(None, description="User ID (optional, defaults to session_id if not provided)")
+
+class ChatResponse(BaseModel):
+    success: bool = True
+    response: str
+    trace: Dict[str, Any] = Field(default_factory=dict, description="Full trace data")
+    images: List[Dict[str, Any]] = Field(default_factory=list, description="Related images from search")
+    chat_id: Optional[str] = Field(None, description="Chat log ID")
+
+class ChatTeachRequest(BaseModel):
+    agent_id: str = Field(..., description="Agent ID")
+    chat_id: str = Field(..., description="Chat log ID")
+    approved_response: str = Field(..., description="Approved response to teach")
+
+class ChatTeachResponse(BaseModel):
+    success: bool = True
+    knowledge_id: str
+    message: str
+
+class CleanupRequest(BaseModel):
+    days_old: int = Field(7, ge=1, description="Delete agents older than N days")
+
+class CleanupResponse(BaseModel):
+    success: bool = True
+    deleted_count: int
+    message: str

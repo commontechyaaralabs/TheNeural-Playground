@@ -4,7 +4,7 @@ export const SCRATCH_EDITOR_CONFIG = {
   PRODUCTION_URL: 'https://scratch-editor-uaaur7no2a-uc.a.run.app',
   
   // Development URL (localhost)
-  DEVELOPMENT_URL: 'https://scratch-editor-uaaur7no2a-uc.a.run.app',
+  DEVELOPMENT_URL: 'http://localhost:8601',
   
   // Get the appropriate URL based on environment
   getUrl: () => {

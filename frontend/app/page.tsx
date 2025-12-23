@@ -203,7 +203,7 @@ export default function Home() {
 
       {/* Hero Section */}
       <section className="pt-24 pb-20 px-4 sm:px-6 lg:px-8">
-        <div className="max-w-7xl mx-auto text-center">
+        <div className="text-center">
           <h1 className="text-4xl md:text-6xl font-bold mb-6 text-white">
             Teach a computer to{' '}
             <span className="text-[#dcfc84]">
@@ -245,7 +245,7 @@ export default function Home() {
 
       {/* How It Works Section */}
       <section className="py-20 px-4 sm:px-6 lg:px-8">
-        <div className="max-w-7xl mx-auto">
+        <div>
           <div className="text-center mb-16">
             <h2 className="text-3xl md:text-5xl font-bold mb-4 text-white">How It Works</h2>
             <p className="text-xl text-white max-w-3xl mx-auto">
@@ -309,7 +309,7 @@ export default function Home() {
 
       {/* Footer */}
       <footer className="bg-[#1c1c1c] border-t border-[#bc6cd3]/20 py-8 px-4 sm:px-6 lg:px-8">
-        <div className="max-w-7xl mx-auto text-center">
+        <div className="text-center">
           <p className="text-sm text-white">
             © 2024 TheNeural Playground. Empowering the next generation of AI creators.
           </p>

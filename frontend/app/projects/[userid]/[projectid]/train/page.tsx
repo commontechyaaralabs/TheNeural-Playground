@@ -464,10 +464,19 @@ export default function TrainPage() {
           // Don't save merged data to localStorage - only save local labels separately
         }
       } else {
-        console.error('❌ Failed to refresh examples from API:', response.status);
+        // Handle specific error cases gracefully
+        if (response.status === 404) {
+          // Project might have been deleted - this is expected, don't show error
+          console.log('⚠️ Project not found (may have been deleted), skipping refresh');
+        } else {
+          console.error('❌ Failed to refresh examples from API:', response.status);
+        }
       }
     } catch (error) {
-      console.error('❌ Error refreshing examples from API:', error);
+      // Only log errors that aren't related to navigation/unmounting
+      if (error instanceof Error && !error.message.includes('aborted')) {
+        console.error('❌ Error refreshing examples from API:', error);
+      }
     } finally {
       // Always mark as loaded after API call completes, regardless of success/failure
       if (!hasInitialDataLoaded) {
@@ -1619,7 +1628,7 @@ export default function TrainPage() {
       <Header />
 
       <main className="pt-24 pb-20 px-4 sm:px-6 lg:px-8">
-        <div className="max-w-7xl mx-auto">
+        <div>
           
 
                                <div className="mb-8 flex items-center justify-between">
