@@ -2359,13 +2359,6 @@ Maintain professionalism while being friendly and approachable."
                                       {linkMessage.text}
                                     </p>
                                   )}
-                                  
-                                  <div className="mt-4 p-3 bg-[#1c1c1c] rounded-lg">
-                                    <p className="text-xs text-gray-500">
-                                      <strong className="text-gray-400">Tip:</strong> Works best with text-heavy pages like blog posts, documentation, and articles. 
-                                      JavaScript-rendered content may not be captured.
-                                    </p>
-                                  </div>
                                 </div>
                               </div>
 
