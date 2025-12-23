@@ -479,7 +479,8 @@ class ImageRecognitionTrainer:
             all_probabilities.sort(key=lambda x: x['confidence'], reverse=True)
             
             logger.info(f"🔮 MobileNetV2 Prediction: {predicted_class} ({confidence:.2f}% confidence)")
-            logger.info(f"📊 All probabilities: {[f'{p['class']}: {p['confidence']:.1f}%' for p in all_probabilities]}")
+            prob_strings = [f"{p['class']}: {p['confidence']:.1f}%" for p in all_probabilities]
+            logger.info(f"📊 All probabilities: {prob_strings}")
             
             return {
                 'predicted_class': predicted_class,

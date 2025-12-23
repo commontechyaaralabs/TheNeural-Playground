@@ -8,10 +8,48 @@ from bs4 import BeautifulSoup
 import re
 
 from ..models import Knowledge, KnowledgeType, KnowledgeTextRequest, KnowledgeFileRequest, KnowledgeLinkRequest, KnowledgeQnARequest
-from ..config import gcp_clients
+from ..config import gcp_clients, settings
 from .vertex_ai_service import VertexAIService
 
 logger = logging.getLogger(__name__)
+
+
+def clean_scraped_text(text: str) -> str:
+    """
+    Clean scraped web content by removing noise, URLs, base64 data, etc.
+    This provides cleaner text for knowledge base storage.
+    """
+    # Remove base64 data URIs
+    text = re.sub(r'data:[^,]+;base64,[A-Za-z0-9+/=]+', '', text)
+    
+    # Remove all URLs (http/https)
+    text = re.sub(r'https?:\/\/\S+', '', text)
+    
+    # Remove markdown links [text](url) - keep only text
+    text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)
+    
+    # Remove relative URLs/paths like /explore/movies-chennai
+    text = re.sub(r'\s*/[a-zA-Z0-9_\-/\?=&\.%~#]+', '', text)
+    
+    # Remove leftover brackets
+    text = re.sub(r'[\[\]\(\)]', '', text)
+    
+    # Remove 'icon' noise
+    text = re.sub(r'\bicon\b', '', text, flags=re.IGNORECASE)
+    
+    # Remove tel: links
+    text = re.sub(r'tel:[0-9\-]+', '', text)
+    
+    # Remove common noise patterns (image extensions)
+    text = re.sub(r'\b(svg|png|jpg|jpeg|webp|gif)\b', '', text, flags=re.IGNORECASE)
+    
+    # Convert all newlines to spaces (flatten text)
+    text = text.replace('\n', ' ')
+    
+    # Normalize multiple spaces to single space
+    text = re.sub(r'\s{2,}', ' ', text)
+    
+    return text.strip()
 
 
 class KnowledgeService:
@@ -218,24 +256,155 @@ class KnowledgeService:
             logger.error(f"❌ Failed to extract text from file: {e}")
             raise Exception(f"Failed to extract text from file: {str(e)}")
     
-    def add_link_knowledge(self, request: KnowledgeLinkRequest) -> Dict[str, Any]:
-        """Add link knowledge to agent"""
+    def _scrape_with_brightdata(self, url: str) -> Dict[str, Any]:
+        """
+        Scrape URL content using BrightData API.
+        BrightData handles JavaScript rendering and provides better content extraction.
+        
+        Returns:
+            Dict with 'text', 'page_title', and 'success' status
+        """
+        if not settings.brightdata_api_token:
+            return {"success": False, "error": "BrightData API token not configured"}
+        
         try:
-            logger.info(f"🔗 Adding link knowledge for agent: {request.agent_id}, URL: {request.url}")
+            brightdata_url = f"https://api.brightdata.com/datasets/v3/scrape?dataset_id={settings.brightdata_dataset_id}&notify=false&include_errors=true"
             
-            # Fetch URL content with better headers
-            response = requests.get(request.url, timeout=30, headers={
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
-            })
+            # Authorization header without "Bearer " prefix - matches BrightData API format
+            headers = {
+                "Authorization": settings.brightdata_api_token,
+                "Content-Type": "application/json"
+            }
+            
+            payload = {
+                "input": [{"url": url}]
+            }
+            
+            logger.info(f"🌐 Scraping with BrightData API: {url}")
+            response = requests.post(
+                brightdata_url,
+                headers=headers,
+                json=payload,
+                timeout=60  # BrightData may take longer for JS rendering
+            )
+            
             response.raise_for_status()
+            data = response.json()
             
+            logger.info(f"📦 BrightData response keys: {data.keys() if isinstance(data, dict) else type(data)}")
+            
+            # BrightData returns html2text field with the converted text
+            raw_text = ""
+            page_title = url
+            
+            # Handle both single object and list responses
+            if isinstance(data, list) and len(data) > 0:
+                item = data[0]
+                raw_text = item.get("html2text", "") or item.get("text", "") or item.get("content", "")
+                page_title = item.get("title", "") or item.get("page_title", "") or url
+            elif isinstance(data, dict):
+                raw_text = data.get("html2text", "") or data.get("text", "") or data.get("content", "")
+                page_title = data.get("title", "") or data.get("page_title", "") or url
+            
+            if not raw_text:
+                logger.warning(f"⚠️ BrightData response structure: {data}")
+                return {"success": False, "error": "No text content in BrightData response"}
+            
+            # Apply enhanced cleaning
+            cleaned_text = clean_scraped_text(raw_text)
+            
+            logger.info(f"✅ BrightData scraped {len(raw_text)} chars, cleaned to {len(cleaned_text)} chars")
+            
+            return {
+                "success": True,
+                "text": cleaned_text,
+                "page_title": page_title,
+                "raw_chars": len(raw_text),
+                "cleaned_chars": len(cleaned_text),
+                "scrape_method": "brightdata"
+            }
+            
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"⚠️ BrightData API request failed: {e}")
+            return {"success": False, "error": str(e)}
+        except Exception as e:
+            logger.warning(f"⚠️ BrightData scraping error: {e}")
+            return {"success": False, "error": str(e)}
+    
+    def _scrape_with_beautifulsoup(self, url: str) -> Dict[str, Any]:
+        """
+        Fallback scraping using requests + BeautifulSoup.
+        Works for static HTML pages but may not capture JavaScript-rendered content.
+        
+        Returns:
+            Dict with 'text', 'page_title', and 'success' status
+        """
+        # Multiple user agents to try if blocked
+        user_agents = [
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0',
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        ]
+        
+        last_error = None
+        
+        for user_agent in user_agents:
+            try:
+                # Create a session to handle cookies
+                session = requests.Session()
+                
+                # More comprehensive browser-like headers
+                headers = {
+                    'User-Agent': user_agent,
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                    'Accept-Language': 'en-US,en;q=0.9',
+                    'Accept-Encoding': 'gzip, deflate, br',
+                    'DNT': '1',
+                    'Connection': 'keep-alive',
+                    'Upgrade-Insecure-Requests': '1',
+                    'Sec-Fetch-Dest': 'document',
+                    'Sec-Fetch-Mode': 'navigate',
+                    'Sec-Fetch-Site': 'none',
+                    'Sec-Fetch-User': '?1',
+                    'Cache-Control': 'max-age=0',
+                }
+                
+                # First make a request to establish session/cookies
+                response = session.get(url, timeout=30, headers=headers, allow_redirects=True)
+                
+                # Check for blocking
+                if response.status_code == 403:
+                    logger.warning(f"⚠️ Got 403 with user agent, trying next...")
+                    last_error = f"403 Forbidden - Site is blocking scrapers"
+                    continue
+                    
+                response.raise_for_status()
+                break  # Success, exit the retry loop
+                
+            except requests.exceptions.HTTPError as e:
+                if e.response.status_code == 403:
+                    logger.warning(f"⚠️ Got 403 Forbidden, trying different user agent...")
+                    last_error = str(e)
+                    continue
+                raise
+            except Exception as e:
+                last_error = str(e)
+                continue
+        else:
+            # All user agents failed
+            return {
+                "success": False, 
+                "error": f"Site blocked scraping (403 Forbidden). This website has anti-bot protection. Try using BrightData API for JavaScript-heavy sites. Last error: {last_error}"
+            }
+        
+        # If we got here, we have a successful response
+        try:
             # Parse HTML and extract text
             soup = BeautifulSoup(response.content, 'html.parser')
             
             # Get page title
-            page_title = soup.title.string.strip() if soup.title and soup.title.string else request.url
+            page_title = soup.title.string.strip() if soup.title and soup.title.string else url
             
             # Try to get meta description as fallback
             meta_description = ""
@@ -272,12 +441,54 @@ class KnowledgeService:
             if len(text) < 200 and meta_description:
                 text = f"{page_title}. {meta_description}. {text}"
             
-            logger.info(f"📝 Raw extracted length: {len(text)} chars")
+            # Apply enhanced cleaning
+            cleaned_text = clean_scraped_text(text)
+            
+            logger.info(f"✅ BeautifulSoup scraped {len(text)} chars, cleaned to {len(cleaned_text)} chars")
+            
+            return {
+                "success": True,
+                "text": cleaned_text,
+                "page_title": page_title,
+                "raw_chars": len(text),
+                "cleaned_chars": len(cleaned_text),
+                "scrape_method": "beautifulsoup"
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ BeautifulSoup parsing error: {e}")
+            return {"success": False, "error": str(e)}
+
+    def add_link_knowledge(self, request: KnowledgeLinkRequest) -> Dict[str, Any]:
+        """Add link knowledge to agent using BrightData API (preferred) or BeautifulSoup fallback"""
+        try:
+            logger.info(f"🔗 Adding link knowledge for agent: {request.agent_id}, URL: {request.url}")
+            
+            # Try BrightData first (better for JS-rendered content), then fallback to BeautifulSoup
+            scrape_result = self._scrape_with_brightdata(request.url)
+            
+            if not scrape_result["success"]:
+                logger.info(f"⚠️ BrightData failed, falling back to BeautifulSoup: {scrape_result.get('error', 'Unknown error')}")
+                scrape_result = self._scrape_with_beautifulsoup(request.url)
+            
+            if not scrape_result["success"]:
+                error_msg = scrape_result.get('error', 'Unknown error')
+                # Provide helpful error messages
+                if "403" in error_msg or "Forbidden" in error_msg:
+                    raise ValueError(f"This website is blocking web scrapers. Try a different URL like a blog post, documentation page, or article. Dynamic sites like ticket booking, e-commerce checkouts, and login-required pages typically cannot be scraped.")
+                elif "timeout" in error_msg.lower():
+                    raise ValueError(f"The website took too long to respond. Please try again later.")
+                else:
+                    raise ValueError(f"Failed to scrape URL: {error_msg}")
+            
+            text = scrape_result["text"]
+            page_title = scrape_result["page_title"]
+            scrape_method = scrape_result.get("scrape_method", "unknown")
+            
+            logger.info(f"📝 Extracted {len(text)} chars from URL using {scrape_method}")
             
             if len(text) < 50:
                 raise ValueError(f"Could not extract enough text from URL. This site may require JavaScript to render content. Only got {len(text)} characters.")
-            
-            logger.info(f"📝 Extracted {len(text)} chars from URL")
             
             # Chunk the text
             chunks = self._chunk_text(text)
@@ -303,7 +514,8 @@ class KnowledgeService:
                         "page_title": page_title,
                         "chunk_index": i,
                         "total_chunks": len(chunks),
-                        "extracted_chars": len(text)
+                        "extracted_chars": len(text),
+                        "scrape_method": scrape_method
                     },
                     "priority": 1,
                     "created_at": datetime.now(timezone.utc)
@@ -313,13 +525,14 @@ class KnowledgeService:
                 knowledge_ref.set(knowledge_data)
                 knowledge_ids.append(knowledge_id)
             
-            logger.info(f"✅ Link knowledge added: {len(knowledge_ids)} chunks from {request.url}")
+            logger.info(f"✅ Link knowledge added: {len(knowledge_ids)} chunks from {request.url} using {scrape_method}")
             return {
                 "knowledge_ids": knowledge_ids,
                 "chunks_added": len(knowledge_ids),
                 "url": request.url,
                 "page_title": page_title,
-                "extracted_chars": len(text)
+                "extracted_chars": len(text),
+                "scrape_method": scrape_method
             }
             
         except requests.exceptions.RequestException as e:

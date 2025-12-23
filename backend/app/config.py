@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     google_api_key: Optional[str] = Field(default=None, env="GOOGLE_API_KEY")
     google_cse_id: Optional[str] = Field(default=None, env="GOOGLE_CSE_ID")
     
+    # BrightData Web Scraping API
+    brightdata_api_token: Optional[str] = Field(default=None, env="BRIGHTDATA_API_TOKEN")
+    brightdata_dataset_id: str = Field(default="gd_m6gjtfmeh43we6cqc", env="BRIGHTDATA_DATASET_ID")
+    
     class Config:
         env_file = ".env"
 

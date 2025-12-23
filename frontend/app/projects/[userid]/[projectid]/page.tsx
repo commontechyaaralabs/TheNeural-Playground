@@ -131,6 +131,7 @@ export default function ProjectDetailsPage() {
   const [linkKnowledgeList, setLinkKnowledgeList] = useState<any[]>([]);
   const [isLoadingLinkKnowledge, setIsLoadingLinkKnowledge] = useState(false);
   const [deletingLinkId, setDeletingLinkId] = useState<string | null>(null);
+  const [viewingLink, setViewingLink] = useState<{url: string; pageTitle: string; content: string; chunks: any[]; extractedChars: number; scrapeMethod: string} | null>(null);
 
   const params = useParams();
   const router = useRouter();
@@ -675,13 +676,14 @@ export default function ProjectDetailsPage() {
         pageTitle: item.metadata?.page_title || url,
         totalChunks: item.metadata?.total_chunks || 1,
         extractedChars: item.metadata?.extracted_chars,
+        scrapeMethod: item.metadata?.scrape_method || 'unknown',
         chunks: [],
         content: item.content
       };
     }
     acc[url].chunks.push(item);
     return acc;
-  }, {} as Record<string, { url: string; pageTitle: string; totalChunks: number; extractedChars: number; chunks: any[]; content: string }>);
+  }, {} as Record<string, { url: string; pageTitle: string; totalChunks: number; extractedChars: number; scrapeMethod: string; chunks: any[]; content: string }>);
 
   const groupedLinkList = Object.values(groupedLinkKnowledge);
 
@@ -2407,6 +2409,17 @@ Maintain professionalism while being friendly and approachable."
                                             </div>
                                           </div>
                                           <div className="flex items-center gap-1 flex-shrink-0">
+                                            {/* View Content Button */}
+                                            <button
+                                              onClick={() => setViewingLink(link)}
+                                              className="p-1.5 text-gray-400 hover:text-[#bc6cd3] hover:bg-[#bc6cd3]/10 rounded transition-colors"
+                                              title="View scraped content"
+                                            >
+                                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                                              </svg>
+                                            </button>
                                             {/* Open URL Button */}
                                             <button
                                               onClick={() => openLinkUrl(link.url)}
@@ -2437,7 +2450,11 @@ Maintain professionalism while being friendly and approachable."
                                             </button>
                                           </div>
                                         </div>
-                                        <p className="text-xs text-gray-400 mt-2 line-clamp-2">{link.content}</p>
+                                        <p 
+                                          className="text-xs text-gray-400 mt-2 line-clamp-2 cursor-pointer hover:text-gray-300 transition-colors"
+                                          onClick={() => setViewingLink(link)}
+                                          title="Click to view full content"
+                                        >{link.content}</p>
                                       </div>
                                     ))}
                                   </div>
@@ -2746,6 +2763,74 @@ Maintain professionalism while being friendly and approachable."
         </div>
             </div>
           )}
+
+      {/* View Scraped Content Modal */}
+      {viewingLink && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+          <div className="bg-[#1c1c1c] border border-[#bc6cd3]/30 rounded-xl max-w-4xl w-full max-h-[90vh] flex flex-col shadow-2xl">
+            {/* Modal Header */}
+            <div className="bg-[#2a2a2a] px-6 py-4 rounded-t-xl border-b border-[#bc6cd3]/20 flex items-center justify-between">
+              <div className="flex items-center gap-3 flex-1 min-w-0">
+                <div className="w-10 h-10 bg-green-500/20 rounded-lg flex items-center justify-center flex-shrink-0">
+                  <svg className="w-5 h-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                  </svg>
+                </div>
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-lg font-semibold text-white truncate">{viewingLink.pageTitle}</h3>
+                  <p className="text-xs text-gray-400 truncate">{viewingLink.url}</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setViewingLink(null)}
+                className="p-2 text-gray-400 hover:text-white hover:bg-[#3a3a3a] rounded-lg transition-colors ml-4"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            
+            {/* Stats Bar */}
+            <div className="px-6 py-3 bg-[#252525] border-b border-[#bc6cd3]/10 flex items-center gap-4 text-sm">
+              <span className="text-gray-400">
+                <span className="text-[#dcfc84] font-medium">{viewingLink.extractedChars ? (viewingLink.extractedChars / 1000).toFixed(1) : '?'}k</span> characters extracted
+              </span>
+            </div>
+
+            {/* Content Area - Single Text Box */}
+            <div className="flex-1 overflow-y-auto p-6">
+              <div className="bg-[#2a2a2a] rounded-lg p-4 border border-[#3a3a3a]">
+                <p className="text-sm text-gray-300 whitespace-pre-wrap leading-relaxed">
+                  {viewingLink.chunks && viewingLink.chunks.length > 0 
+                    ? viewingLink.chunks.map((chunk: any) => chunk.content).join('\n\n')
+                    : viewingLink.content
+                  }
+                </p>
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="px-6 py-4 bg-[#2a2a2a] rounded-b-xl border-t border-[#bc6cd3]/20 flex items-center justify-between">
+              <button
+                onClick={() => openLinkUrl(viewingLink.url)}
+                className="px-4 py-2 text-sm text-gray-400 hover:text-green-400 flex items-center gap-2 transition-colors"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                </svg>
+                Open Original URL
+              </button>
+              <button
+                onClick={() => setViewingLink(null)}
+                className="px-6 py-2 bg-[#bc6cd3] text-white rounded-lg hover:bg-[#bc6cd3]/80 transition-colors font-medium"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       </main>
     </div>
   );
