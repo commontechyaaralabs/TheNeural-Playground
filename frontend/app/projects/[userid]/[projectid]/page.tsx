@@ -1,6 +1,6 @@
 'use client';
 
-
+import React from 'react';
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useRouter, usePathname } from 'next/navigation';
 import Header from '../../../../components/Header';
@@ -73,6 +73,59 @@ interface ChatMessage {
   images?: ImageResult[];
 }
 
+// Rule condition interface for WHEN dropdown
+interface RuleCondition {
+  id: string;
+  type: string;
+  value: string;
+  isDropdownOpen: boolean;
+}
+
+// Rule action interface for DO dropdown
+interface RuleAction {
+  id: string;
+  type: string;
+  value: string;
+  isDropdownOpen: boolean;
+  kbDropdownOpen?: boolean;
+}
+
+// Saved rule from backend
+interface SavedRule {
+  rule_id: string;
+  agent_id: string;
+  name: string;
+  conditions: Array<{type: string; value: string}>;
+  match_type: 'ANY' | 'ALL';
+  actions: Array<{type: string; value: string}>;
+  priority: number;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+// Grouped file knowledge interface
+interface GroupedFileKnowledge {
+  fileName: string;
+  fileType: string;
+  fileUrl: string;
+  fileSize: number;
+  totalChunks: number;
+  chunks: { knowledge_id: string; [key: string]: unknown }[];
+  content: string;
+}
+
+// Grouped link knowledge interface
+interface GroupedLinkKnowledge {
+  url: string;
+  pageTitle: string;
+  totalChunks: number;
+  extractedChars: number;
+  scrapeMethod: string;
+  chunks: { knowledge_id: string; [key: string]: unknown }[];
+  content: string;
+}
+
 export default function ProjectDetailsPage() {
   const [guestSession, setGuestSession] = useState<GuestSession | null>(null);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
@@ -131,7 +184,24 @@ export default function ProjectDetailsPage() {
   const [linkKnowledgeList, setLinkKnowledgeList] = useState<any[]>([]);
   const [isLoadingLinkKnowledge, setIsLoadingLinkKnowledge] = useState(false);
   const [deletingLinkId, setDeletingLinkId] = useState<string | null>(null);
-  const [viewingLink, setViewingLink] = useState<{url: string; pageTitle: string; content: string; chunks: any[]; extractedChars: number; scrapeMethod: string} | null>(null);
+  const [viewingLink, setViewingLink] = useState<GroupedLinkKnowledge | null>(null);
+
+  // Rules/Actions state
+  const [whenConditions, setWhenConditions] = useState<RuleCondition[]>([
+    { id: '1', type: '', value: '', isDropdownOpen: false }
+  ]);
+  const [doActions, setDoActions] = useState<RuleAction[]>([
+    { id: '1', type: '', value: '', isDropdownOpen: false, kbDropdownOpen: false }
+  ]);
+  const [matchType, setMatchType] = useState<'ANY' | 'ALL'>('ANY');
+  const [isMatchDropdownOpen, setIsMatchDropdownOpen] = useState(false);
+  const [savedRules, setSavedRules] = useState<SavedRule[]>([]);
+  const [isLoadingRules, setIsLoadingRules] = useState(false);
+  const [isSavingRule, setIsSavingRule] = useState(false);
+  const [ruleSaveMessage, setRuleSaveMessage] = useState<{type: 'success' | 'error', text: string} | null>(null);
+  const [deletingRuleId, setDeletingRuleId] = useState<string | null>(null);
+  const [isCreatingRule, setIsCreatingRule] = useState(false);
+  const actionsContainerRef = useRef<HTMLDivElement>(null);
 
   const params = useParams();
   const router = useRouter();
@@ -176,6 +246,13 @@ export default function ProjectDetailsPage() {
       loadKnowledgeList();
     }
   }, [selectedProject?.agent_id, knowledgeView, trainSection]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Load rules when entering actions section
+  useEffect(() => {
+    if (selectedProject?.agent_id && trainSection === 'actions') {
+      loadRules();
+    }
+  }, [selectedProject?.agent_id, trainSection]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load file knowledge list when entering file view
   useEffect(() => {
@@ -608,9 +685,9 @@ export default function ProjectDetailsPage() {
     }
     acc[fileName].chunks.push(item);
     return acc;
-  }, {} as Record<string, { fileName: string; fileType: string; fileUrl: string; fileSize: number; totalChunks: number; chunks: any[]; content: string }>);
+  }, {} as Record<string, GroupedFileKnowledge>);
 
-  const groupedFileList = Object.values(groupedFileKnowledge);
+  const groupedFileList: GroupedFileKnowledge[] = Object.values(groupedFileKnowledge);
 
   // Delete all chunks for a file
   const deleteFileKnowledge = async (fileName: string, chunkIds: string[]) => {
@@ -683,9 +760,9 @@ export default function ProjectDetailsPage() {
     }
     acc[url].chunks.push(item);
     return acc;
-  }, {} as Record<string, { url: string; pageTitle: string; totalChunks: number; extractedChars: number; scrapeMethod: string; chunks: any[]; content: string }>);
+  }, {} as Record<string, GroupedLinkKnowledge>);
 
-  const groupedLinkList = Object.values(groupedLinkKnowledge);
+  const groupedLinkList: GroupedLinkKnowledge[] = Object.values(groupedLinkKnowledge);
 
   // Add link knowledge
   const addLinkKnowledge = async () => {
@@ -759,6 +836,155 @@ export default function ProjectDetailsPage() {
       setDeletingLinkId(null);
     }
   };
+
+  // ==================== RULES/ACTIONS FUNCTIONS ====================
+  
+  // Load rules from backend
+  const loadRules = async () => {
+    if (!selectedProject?.agent_id) return;
+
+    setIsLoadingRules(true);
+    try {
+      const response = await fetch(`${config.apiBaseUrl}/rules?agent_id=${selectedProject.agent_id}`);
+      if (response.ok) {
+        const data = await response.json();
+        setSavedRules(data.data || []);
+      }
+    } catch (error) {
+      console.error('Error loading rules:', error);
+    } finally {
+      setIsLoadingRules(false);
+    }
+  };
+
+  // Save a new rule
+  const saveRule = async () => {
+    if (!selectedProject?.agent_id) return;
+
+    // Validate - at least one complete condition and one complete action
+    const validConditions = whenConditions.filter(c => {
+      if (c.type === 'Conversation starts') return true;
+      return c.type && c.value.trim();
+    });
+    const validActions = doActions.filter(a => a.type && a.value.trim());
+
+    if (validConditions.length === 0) {
+      setRuleSaveMessage({ type: 'error', text: 'Please add at least one condition' });
+      setTimeout(() => setRuleSaveMessage(null), 3000);
+      return;
+    }
+    if (validActions.length === 0) {
+      setRuleSaveMessage({ type: 'error', text: 'Please add at least one action' });
+      setTimeout(() => setRuleSaveMessage(null), 3000);
+      return;
+    }
+
+    setIsSavingRule(true);
+    setRuleSaveMessage(null);
+
+    try {
+      const response = await fetch(`${config.apiBaseUrl}/rules/save`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          agent_id: selectedProject.agent_id,
+          name: '',  // Auto-generate name
+          conditions: validConditions.map(c => ({ type: c.type, value: c.value })),
+          match_type: matchType,
+          actions: validActions.map(a => ({ type: a.type, value: a.value })),
+          priority: 1
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setRuleSaveMessage({ type: 'success', text: 'Rule saved successfully!' });
+        
+        // Reset form
+        setWhenConditions([{ id: '1', type: '', value: '', isDropdownOpen: false }]);
+        setDoActions([{ id: '1', type: '', value: '', isDropdownOpen: false, kbDropdownOpen: false }]);
+        setMatchType('ANY');
+        setIsCreatingRule(false);
+        
+        // Reload rules
+        loadRules();
+        
+        setTimeout(() => setRuleSaveMessage(null), 3000);
+      } else {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || 'Failed to save rule');
+      }
+    } catch (error) {
+      console.error('Error saving rule:', error);
+      setRuleSaveMessage({ type: 'error', text: error instanceof Error ? error.message : 'Failed to save rule' });
+    } finally {
+      setIsSavingRule(false);
+    }
+  };
+
+  // Delete a rule
+  const deleteRule = async (ruleId: string) => {
+    if (!confirm('Are you sure you want to delete this rule?')) return;
+
+    setDeletingRuleId(ruleId);
+    try {
+      const response = await fetch(`${config.apiBaseUrl}/rules/${ruleId}`, {
+        method: 'DELETE',
+      });
+
+      if (response.ok) {
+        setSavedRules(prev => prev.filter(r => r.rule_id !== ruleId));
+        setRuleSaveMessage({ type: 'success', text: 'Rule deleted successfully!' });
+        setTimeout(() => setRuleSaveMessage(null), 3000);
+      } else {
+        throw new Error('Failed to delete rule');
+      }
+    } catch (error) {
+      console.error('Error deleting rule:', error);
+      setRuleSaveMessage({ type: 'error', text: 'Failed to delete rule' });
+    } finally {
+      setDeletingRuleId(null);
+    }
+  };
+
+  // WHEN condition dropdown options
+  const whenConditionOptions = [
+    { value: 'Conversation starts', label: 'Conversation starts', icon: <svg className="w-5 h-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg> },
+    { value: 'User wants to', label: 'User wants to', icon: <svg className="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" /></svg> },
+    { value: 'User talks about', label: 'User talks about', icon: <svg className="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8h2a2 2 0 012 2v6a2 2 0 01-2 2h-2v4l-4-4H9a1.994 1.994 0 01-1.414-.586m0 0L11 14h4a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2v4l.586-.586z" /></svg> },
+    { value: 'User asks about', label: 'User asks about', icon: <svg className="w-5 h-5 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg> },
+    { value: 'User sentiment is', label: 'User sentiment is', icon: <svg className="w-5 h-5 text-pink-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg> },
+    { value: 'User provides', label: 'User provides', icon: <svg className="w-5 h-5 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg> },
+    { value: 'The sentence contains', label: 'The sentence contains', icon: <svg className="w-5 h-5 text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 20l4-16m2 16l4-16M6 9h14M4 15h14" /></svg> },
+  ];
+
+  // DO action dropdown options
+  const doActionOptions = [
+    { value: 'Say exact message', label: 'Say exact message', icon: <svg className="w-5 h-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" /></svg> },
+    { value: 'Always include', label: 'Always include', icon: <svg className="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" /></svg> },
+    { value: 'Always talk about', label: 'Always talk about', icon: <svg className="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z" /></svg> },
+    { value: 'Talk about/mention', label: 'Talk about/mention', icon: <svg className="w-5 h-5 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" /></svg> },
+    { value: "Don't talk about/mention", label: "Don't talk about/mention", icon: <svg className="w-5 h-5 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" /></svg> },
+    { value: 'Ask for information', label: 'Ask for information', icon: <svg className="w-5 h-5 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg> },
+    { value: 'Answer Using Knowledge Base', label: 'Answer Using Knowledge Base', icon: <svg className="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" /></svg> },
+  ];
+
+  // Click outside handler for dropdowns
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (actionsContainerRef.current && !actionsContainerRef.current.contains(event.target as Node)) {
+        setWhenConditions(whenConditions.map(c => ({...c, isDropdownOpen: false})));
+        setDoActions(doActions.map(a => ({...a, isDropdownOpen: false, kbDropdownOpen: false})));
+        setIsMatchDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [whenConditions, doActions]);
 
   // Open original URL in new tab
   const openLinkUrl = (url: string) => {
@@ -925,7 +1151,7 @@ export default function ProjectDetailsPage() {
     
     // Split content by citation patterns like [1], [2], [1, 2], [1, 2, 3]
     const citationPattern = /\[(\d+(?:,\s*\d+)*)\]/g;
-    const parts: (string | JSX.Element)[] = [];
+    const parts: (string | React.ReactElement)[] = [];
     let lastIndex = 0;
     let match;
     let keyIndex = 0;
@@ -2458,7 +2684,7 @@ Maintain professionalism while being friendly and approachable."
                         </div>
                       ) : trainSection === 'actions' ? (
                         /* ACTIONS Section */
-                        <div>
+                        <div ref={actionsContainerRef}>
                           <div className="flex items-center gap-3 mb-6">
                             <svg className="w-6 h-6 text-[#bc6cd3]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 21v-4m0 0V5a2 2 0 012-2h6.5l1 1H21l-3 6 3 6h-8.5l-1-1H5a2 2 0 00-2 2zm9-13.5V9" />
@@ -2469,34 +2695,542 @@ Maintain professionalism while being friendly and approachable."
                             </div>
                           </div>
 
-                          {/* Create New Rule Button */}
-                          <button className="w-full bg-[#bc6cd3]/10 border-2 border-dashed border-[#bc6cd3]/40 rounded-lg p-6 text-center hover:border-[#bc6cd3] hover:bg-[#bc6cd3]/20 transition-all mb-6 group">
-                            <div className="flex items-center justify-center gap-3">
-                              <div className="w-10 h-10 bg-[#bc6cd3] rounded-full flex items-center justify-center group-hover:scale-110 transition-transform">
-                                <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                                </svg>
-                              </div>
-                              <span className="text-lg font-semibold text-[#bc6cd3]">Create New Rule</span>
+                          {/* Rule Save Message */}
+                          {ruleSaveMessage && (
+                            <div className={`mb-4 p-3 rounded-lg ${ruleSaveMessage.type === 'success' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
+                              {ruleSaveMessage.text}
                             </div>
-                          </button>
+                          )}
+
+                          {/* Create New Rule Button */}
+                          {!isCreatingRule && (
+                            <button 
+                              onClick={() => setIsCreatingRule(true)}
+                              className="w-full bg-[#bc6cd3]/10 border-2 border-dashed border-[#bc6cd3]/40 rounded-lg p-6 text-center hover:border-[#bc6cd3] hover:bg-[#bc6cd3]/20 transition-all mb-6 group"
+                            >
+                              <div className="flex items-center justify-center gap-3">
+                                <div className="w-10 h-10 bg-[#bc6cd3] rounded-full flex items-center justify-center group-hover:scale-110 transition-transform">
+                                  <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                                  </svg>
+                                </div>
+                                <span className="text-lg font-semibold text-[#bc6cd3]">Create New Rule</span>
+                              </div>
+                            </button>
+                          )}
+
+                          {/* Rule Builder Form */}
+                          {isCreatingRule && (
+                            <div className="bg-[#2a2a2a] rounded-xl p-6 border border-[#bc6cd3]/20 mb-6">
+                              <div className="flex items-center justify-between mb-6">
+                                <h3 className="text-lg font-semibold text-white">New Rule</h3>
+                                <button
+                                  onClick={() => {
+                                    setIsCreatingRule(false);
+                                    setWhenConditions([{ id: '1', type: '', value: '', isDropdownOpen: false }]);
+                                    setDoActions([{ id: '1', type: '', value: '', isDropdownOpen: false, kbDropdownOpen: false }]);
+                                    setMatchType('ANY');
+                                  }}
+                                  className="text-gray-400 hover:text-white transition-colors"
+                                >
+                                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                  </svg>
+                                </button>
+                              </div>
+
+                              {/* WHEN Conditions */}
+                              <div className="mb-6">
+                                <h4 className="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">WHEN (Conditions)</h4>
+                                {whenConditions.map((condition, index) => (
+                                  <div key={condition.id} className="mb-4">
+                                    <div className="flex items-center gap-3">
+                                      <span className="text-white font-medium w-16">WHEN</span>
+                                      <div className="flex-1 relative">
+                                        <button
+                                          onClick={() => {
+                                            setWhenConditions(whenConditions.map(c =>
+                                              c.id === condition.id
+                                                ? {...c, isDropdownOpen: !c.isDropdownOpen}
+                                                : {...c, isDropdownOpen: false}
+                                            ));
+                                            setDoActions(doActions.map(a => ({...a, isDropdownOpen: false})));
+                                            setIsMatchDropdownOpen(false);
+                                          }}
+                                          className="w-full flex items-center justify-between px-4 py-3 bg-[#1c1c1c] border border-[#bc6cd3]/20 rounded-lg text-left hover:border-[#bc6cd3]/40 transition-colors"
+                                        >
+                                          <span className={condition.type ? 'text-white' : 'text-gray-500'}>
+                                            {condition.type || 'Select a condition...'}
+                                          </span>
+                                          <svg className={`w-5 h-5 text-gray-400 transition-transform ${condition.isDropdownOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                          </svg>
+                                        </button>
+                                        {condition.isDropdownOpen && (
+                                          <div className="absolute top-full left-0 right-0 mt-2 bg-white rounded-lg shadow-xl border border-gray-200 z-50 max-h-80 overflow-y-auto">
+                                            {whenConditionOptions.map(option => (
+                                              <button
+                                                key={option.value}
+                                                onClick={() => {
+                                                  setWhenConditions(whenConditions.map(c =>
+                                                    c.id === condition.id
+                                                      ? {...c, type: option.value, isDropdownOpen: false}
+                                                      : c
+                                                  ));
+                                                }}
+                                                className="w-full flex items-center gap-3 px-4 py-3 text-left text-gray-700 hover:bg-gray-50 transition-colors"
+                                              >
+                                                {option.icon}
+                                                <span className="text-sm font-medium">{option.label}</span>
+                                              </button>
+                                            ))}
+                                          </div>
+                                        )}
+                                      </div>
+                                      <div className="flex gap-1">
+                                        {(() => {
+                                          const isComplete = condition.type === 'Conversation starts' || (condition.type && condition.value.trim());
+                                          const isLastCondition = index === whenConditions.length - 1;
+                                          return (
+                                            <button
+                                              onClick={() => {
+                                                if (isComplete && isLastCondition) {
+                                                  setWhenConditions([...whenConditions, { id: Date.now().toString(), type: '', value: '', isDropdownOpen: false }]);
+                                                }
+                                              }}
+                                              disabled={!isComplete || !isLastCondition}
+                                              className={`w-8 h-8 rounded-lg flex items-center justify-center transition-colors ${
+                                                isComplete && isLastCondition
+                                                  ? 'bg-[#10b981] hover:bg-[#059669] cursor-pointer'
+                                                  : 'bg-gray-600 cursor-not-allowed opacity-50'
+                                              }`}
+                                            >
+                                              <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                                              </svg>
+                                            </button>
+                                          );
+                                        })()}
+                                        {whenConditions.length > 1 && (
+                                          <button
+                                            onClick={() => setWhenConditions(whenConditions.filter(c => c.id !== condition.id))}
+                                            className="w-8 h-8 bg-red-500/20 rounded-lg flex items-center justify-center hover:bg-red-500/40 transition-colors"
+                                          >
+                                            <svg className="w-4 h-4 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" />
+                                            </svg>
+                                          </button>
+                                        )}
+                                      </div>
+                                    </div>
+                                    {condition.type && condition.type !== 'Conversation starts' && (
+                                      <div className="ml-19 mt-2">
+                                        <input
+                                          type="text"
+                                          placeholder={`Enter ${condition.type.toLowerCase().replace('user ', '')}...`}
+                                          value={condition.value}
+                                          onChange={(e) => {
+                                            setWhenConditions(whenConditions.map(c =>
+                                              c.id === condition.id ? {...c, value: e.target.value} : c
+                                            ));
+                                          }}
+                                          className="w-full px-4 py-2 bg-[#1c1c1c] border border-[#bc6cd3]/20 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-[#bc6cd3]/60 text-sm"
+                                        />
+                                      </div>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+
+                              {/* Match Type (ANY/ALL) - shown when multiple conditions */}
+                              {whenConditions.length > 1 && (
+                                <div className="mb-6 bg-[#374151] rounded-lg px-4 py-3 flex items-center justify-center gap-2">
+                                  <span className="text-white font-medium">IF</span>
+                                  <div className="relative">
+                                    <button
+                                      onClick={() => {
+                                        setIsMatchDropdownOpen(!isMatchDropdownOpen);
+                                        setWhenConditions(whenConditions.map(c => ({...c, isDropdownOpen: false})));
+                                        setDoActions(doActions.map(a => ({...a, isDropdownOpen: false})));
+                                      }}
+                                      className="flex items-center gap-2 px-3 py-1 bg-[#bc6cd3] rounded-md text-white font-medium"
+                                    >
+                                      {matchType}
+                                      <svg className={`w-4 h-4 transition-transform ${isMatchDropdownOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                      </svg>
+                                    </button>
+                                    {isMatchDropdownOpen && (
+                                      <div className="absolute top-full left-0 mt-1 bg-white rounded-lg shadow-xl border border-gray-200 z-50">
+                                        <button
+                                          onClick={() => { setMatchType('ANY'); setIsMatchDropdownOpen(false); }}
+                                          className="w-full px-4 py-2 text-left text-gray-700 hover:bg-gray-50 text-sm font-medium"
+                                        >
+                                          ANY (OR)
+                                        </button>
+                                        <button
+                                          onClick={() => { setMatchType('ALL'); setIsMatchDropdownOpen(false); }}
+                                          className="w-full px-4 py-2 text-left text-gray-700 hover:bg-gray-50 text-sm font-medium"
+                                        >
+                                          ALL (AND)
+                                        </button>
+                                      </div>
+                                    )}
+                                  </div>
+                                  <span className="text-white font-medium">of the conditions match</span>
+                                </div>
+                              )}
+
+                              {/* DO Actions */}
+                              <div className="mb-6">
+                                <h4 className="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">DO (Actions)</h4>
+                                {doActions.map((action, index) => (
+                                  <div key={action.id} className="mb-4">
+                                    <div className="flex items-center gap-3">
+                                      <span className="text-white font-medium w-16">DO</span>
+                                      <div className="flex-1 relative">
+                                        <button
+                                          onClick={() => {
+                                            setDoActions(doActions.map(a =>
+                                              a.id === action.id
+                                                ? {...a, isDropdownOpen: !a.isDropdownOpen}
+                                                : {...a, isDropdownOpen: false}
+                                            ));
+                                            setWhenConditions(whenConditions.map(c => ({...c, isDropdownOpen: false})));
+                                            setIsMatchDropdownOpen(false);
+                                          }}
+                                          className="w-full flex items-center justify-between px-4 py-3 bg-[#1c1c1c] border border-[#bc6cd3]/20 rounded-lg text-left hover:border-[#bc6cd3]/40 transition-colors"
+                                        >
+                                          <span className={action.type ? 'text-white' : 'text-gray-500'}>
+                                            {action.type || 'Select an action...'}
+                                          </span>
+                                          <svg className={`w-5 h-5 text-gray-400 transition-transform ${action.isDropdownOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                          </svg>
+                                        </button>
+                                        {action.isDropdownOpen && (
+                                          <div className="absolute top-full left-0 right-0 mt-2 bg-white rounded-lg shadow-xl border border-gray-200 z-50 max-h-80 overflow-y-auto">
+                                            {doActionOptions.map(option => (
+                                              <button
+                                                key={option.value}
+                                                onClick={() => {
+                                                  setDoActions(doActions.map(a =>
+                                                    a.id === action.id
+                                                      ? {...a, type: option.value, isDropdownOpen: false}
+                                                      : a
+                                                  ));
+                                                }}
+                                                className="w-full flex items-center gap-3 px-4 py-3 text-left text-gray-700 hover:bg-gray-50 transition-colors"
+                                              >
+                                                {option.icon}
+                                                <span className="text-sm font-medium">{option.label}</span>
+                                              </button>
+                                            ))}
+                                          </div>
+                                        )}
+                                      </div>
+                                      <div className="flex gap-1">
+                                        {(() => {
+                                          const isComplete = action.type && action.value.trim();
+                                          const isLastAction = index === doActions.length - 1;
+                                          return (
+                                            <button
+                                              onClick={() => {
+                                                if (isComplete && isLastAction) {
+                                                  setDoActions([...doActions, { id: Date.now().toString(), type: '', value: '', isDropdownOpen: false, kbDropdownOpen: false }]);
+                                                }
+                                              }}
+                                              disabled={!isComplete || !isLastAction}
+                                              className={`w-8 h-8 rounded-lg flex items-center justify-center transition-colors ${
+                                                isComplete && isLastAction
+                                                  ? 'bg-[#10b981] hover:bg-[#059669] cursor-pointer'
+                                                  : 'bg-gray-600 cursor-not-allowed opacity-50'
+                                              }`}
+                                            >
+                                              <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                                              </svg>
+                                            </button>
+                                          );
+                                        })()}
+                                        {doActions.length > 1 && (
+                                          <button
+                                            onClick={() => setDoActions(doActions.filter(a => a.id !== action.id))}
+                                            className="w-8 h-8 bg-red-500/20 rounded-lg flex items-center justify-center hover:bg-red-500/40 transition-colors"
+                                          >
+                                            <svg className="w-4 h-4 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" />
+                                            </svg>
+                                          </button>
+                                        )}
+                                      </div>
+                                    </div>
+                                    {action.type && (
+                                      <div className="ml-19 mt-2">
+                                        {action.type === 'Answer Using Knowledge Base' ? (
+                                          /* KB Selection Dropdown */
+                                          <div className="relative">
+                                            <button
+                                              onClick={() => {
+                                                setDoActions(doActions.map(a =>
+                                                  a.id === action.id ? {...a, kbDropdownOpen: !a.kbDropdownOpen} : {...a, kbDropdownOpen: false}
+                                                ));
+                                              }}
+                                              className="w-full px-4 py-2.5 bg-[#1c1c1c] border border-[#bc6cd3]/20 rounded-lg text-left flex items-center justify-between hover:border-[#bc6cd3]/40 transition-colors"
+                                            >
+                                              <span className={action.value ? 'text-white' : 'text-gray-500'}>
+                                                {action.value || 'Select knowledge base...'}
+                                              </span>
+                                              <svg className={`w-4 h-4 text-gray-400 transition-transform ${(action as any).kbDropdownOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                              </svg>
+                                            </button>
+                                            
+                                            {(action as any).kbDropdownOpen && (
+                                              <div className="absolute z-50 w-full mt-1 bg-[#1c1c1c] border border-[#bc6cd3]/30 rounded-lg shadow-xl max-h-64 overflow-y-auto">
+                                                {/* All KB Option */}
+                                                <button
+                                                  onClick={() => {
+                                                    setDoActions(doActions.map(a =>
+                                                      a.id === action.id ? {...a, value: 'All Knowledge Base', kbDropdownOpen: false} : a
+                                                    ));
+                                                  }}
+                                                  className="w-full px-4 py-2.5 text-left hover:bg-[#bc6cd3]/20 flex items-center gap-3 border-b border-[#3a3a3a]"
+                                                >
+                                                  <div className="w-6 h-6 bg-emerald-500/20 rounded flex items-center justify-center">
+                                                    <svg className="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                                                    </svg>
+                                                  </div>
+                                                  <span className="text-white font-medium">All Knowledge Base</span>
+                                                </button>
+
+                                                {/* Text KB Section */}
+                                                {knowledgeList.length > 0 && (
+                                                  <>
+                                                    <div className="px-4 py-2 bg-[#252525] text-xs font-semibold text-gray-400 uppercase">Text Knowledge</div>
+                                                    {knowledgeList.map((kb, i) => (
+                                                      <button
+                                                        key={kb.knowledge_id}
+                                                        onClick={() => {
+                                                          setDoActions(doActions.map(a =>
+                                                            a.id === action.id ? {...a, value: `Text: ${kb.content.substring(0, 50)}...`, kbDropdownOpen: false} : a
+                                                          ));
+                                                        }}
+                                                        className="w-full px-4 py-2.5 text-left hover:bg-[#bc6cd3]/20 flex items-center gap-3"
+                                                      >
+                                                        <div className="w-6 h-6 bg-purple-500/20 rounded flex items-center justify-center">
+                                                          <svg className="w-4 h-4 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                                                          </svg>
+                                                        </div>
+                                                        <span className="text-gray-300 text-sm truncate">{kb.content.substring(0, 60)}...</span>
+                                                      </button>
+                                                    ))}
+                                                  </>
+                                                )}
+
+                                                {/* Files Section */}
+                                                {groupedFileList.length > 0 && (
+                                                  <>
+                                                    <div className="px-4 py-2 bg-[#252525] text-xs font-semibold text-gray-400 uppercase">Files</div>
+                                                    {groupedFileList.map((file) => (
+                                                      <button
+                                                        key={file.fileName}
+                                                        onClick={() => {
+                                                          setDoActions(doActions.map(a =>
+                                                            a.id === action.id ? {...a, value: `File: ${file.fileName}`, kbDropdownOpen: false} : a
+                                                          ));
+                                                        }}
+                                                        className="w-full px-4 py-2.5 text-left hover:bg-[#bc6cd3]/20 flex items-center gap-3"
+                                                      >
+                                                        <div className="w-6 h-6 bg-blue-500/20 rounded flex items-center justify-center">
+                                                          <svg className="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                                                          </svg>
+                                                        </div>
+                                                        <div className="flex-1 min-w-0">
+                                                          <span className="text-gray-300 text-sm truncate block">{file.fileName}</span>
+                                                          <span className="text-gray-500 text-xs">{file.totalChunks} chunks</span>
+                                                        </div>
+                                                      </button>
+                                                    ))}
+                                                  </>
+                                                )}
+
+                                                {/* Links Section */}
+                                                {groupedLinkList.length > 0 && (
+                                                  <>
+                                                    <div className="px-4 py-2 bg-[#252525] text-xs font-semibold text-gray-400 uppercase">Links</div>
+                                                    {groupedLinkList.map((link) => (
+                                                      <button
+                                                        key={link.url}
+                                                        onClick={() => {
+                                                          setDoActions(doActions.map(a =>
+                                                            a.id === action.id ? {...a, value: `Link: ${link.pageTitle || link.url}`, kbDropdownOpen: false} : a
+                                                          ));
+                                                        }}
+                                                        className="w-full px-4 py-2.5 text-left hover:bg-[#bc6cd3]/20 flex items-center gap-3"
+                                                      >
+                                                        <div className="w-6 h-6 bg-indigo-500/20 rounded flex items-center justify-center">
+                                                          <svg className="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                                                          </svg>
+                                                        </div>
+                                                        <div className="flex-1 min-w-0">
+                                                          <span className="text-gray-300 text-sm truncate block">{link.pageTitle || 'Untitled'}</span>
+                                                          <span className="text-gray-500 text-xs truncate block">{link.url}</span>
+                                                        </div>
+                                                      </button>
+                                                    ))}
+                                                  </>
+                                                )}
+
+                                                {/* Empty State */}
+                                                {knowledgeList.length === 0 && groupedFileList.length === 0 && groupedLinkList.length === 0 && (
+                                                  <div className="px-4 py-6 text-center text-gray-500">
+                                                    <svg className="w-8 h-8 mx-auto mb-2 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+                                                    </svg>
+                                                    <p className="text-sm">No knowledge base items yet</p>
+                                                    <p className="text-xs mt-1">Add text, files, or links first</p>
+                                                  </div>
+                                                )}
+                                              </div>
+                                            )}
+                                          </div>
+                                        ) : (
+                                          <textarea
+                                            placeholder={action.type === 'Say exact message' ? 'Enter the exact message...' : `Enter ${action.type.toLowerCase()} value...`}
+                                            value={action.value}
+                                            onChange={(e) => {
+                                              setDoActions(doActions.map(a =>
+                                                a.id === action.id ? {...a, value: e.target.value} : a
+                                              ));
+                                            }}
+                                            rows={action.type === 'Say exact message' ? 3 : 1}
+                                            className="w-full px-4 py-2 bg-[#1c1c1c] border border-[#bc6cd3]/20 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-[#bc6cd3]/60 text-sm resize-none"
+                                          />
+                                        )}
+                                      </div>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+
+                              {/* Save Button */}
+                              <div className="flex justify-end">
+                                <button
+                                  onClick={saveRule}
+                                  disabled={isSavingRule}
+                                  className="px-6 py-2.5 bg-[#bc6cd3] text-white rounded-lg font-medium hover:bg-[#a855c7] transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                                >
+                                  {isSavingRule ? (
+                                    <>
+                                      <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                      </svg>
+                                      Saving...
+                                    </>
+                                  ) : (
+                                    <>
+                                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                      </svg>
+                                      Save Rule
+                                    </>
+                                  )}
+                                </button>
+                              </div>
+                            </div>
+                          )}
 
                           {/* Rules Section Header */}
                           <div className="flex items-center justify-between mb-4">
                             <h3 className="text-lg font-semibold text-white">Your Rules</h3>
-                            <span className="text-sm text-gray-400">0 rules</span>
+                            <span className="text-sm text-gray-400">{savedRules.length} rule{savedRules.length !== 1 ? 's' : ''}</span>
                           </div>
 
-                          {/* Empty State */}
-                          <div className="bg-[#2a2a2a] rounded-lg p-8 text-center border border-[#bc6cd3]/10">
-                            <div className="w-16 h-16 bg-[#bc6cd3]/10 rounded-full flex items-center justify-center mx-auto mb-4">
-                              <svg className="w-8 h-8 text-[#bc6cd3]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+                          {/* Loading State */}
+                          {isLoadingRules && (
+                            <div className="bg-[#2a2a2a] rounded-lg p-8 text-center border border-[#bc6cd3]/10">
+                              <svg className="w-8 h-8 animate-spin mx-auto text-[#bc6cd3]" fill="none" viewBox="0 0 24 24">
+                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                               </svg>
+                              <p className="text-gray-400 mt-3">Loading rules...</p>
                             </div>
-                            <h4 className="text-white font-semibold mb-2">No rules yet</h4>
-                            <p className="text-gray-400 text-sm mb-4">Create rules to automate responses based on conditions</p>
-                          </div>
+                          )}
+
+                          {/* Empty State */}
+                          {!isLoadingRules && savedRules.length === 0 && (
+                            <div className="bg-[#2a2a2a] rounded-lg p-8 text-center border border-[#bc6cd3]/10">
+                              <div className="w-16 h-16 bg-[#bc6cd3]/10 rounded-full flex items-center justify-center mx-auto mb-4">
+                                <svg className="w-8 h-8 text-[#bc6cd3]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+                                </svg>
+                              </div>
+                              <h4 className="text-white font-semibold mb-2">No rules yet</h4>
+                              <p className="text-gray-400 text-sm mb-4">Create rules to automate responses based on conditions</p>
+                            </div>
+                          )}
+
+                          {/* Saved Rules List */}
+                          {!isLoadingRules && savedRules.length > 0 && (
+                            <div className="space-y-3">
+                              {savedRules.map((rule) => (
+                                <div key={rule.rule_id} className="bg-[#2a2a2a] rounded-lg p-4 border border-[#bc6cd3]/10 hover:border-[#bc6cd3]/30 transition-colors">
+                                  <div className="flex items-start justify-between">
+                                    <div className="flex-1">
+                                      <h4 className="text-white font-medium mb-2">{rule.name}</h4>
+                                      <div className="space-y-2">
+                                        {/* Conditions */}
+                                        <div className="flex flex-wrap gap-2">
+                                          <span className="text-xs font-medium text-blue-400 uppercase">WHEN:</span>
+                                          {rule.conditions.map((c, i) => (
+                                            <span key={i} className="px-2 py-1 bg-blue-500/20 text-blue-300 text-xs rounded-md">
+                                              {c.type}{c.value ? `: ${c.value}` : ''}
+                                            </span>
+                                          ))}
+                                          {rule.conditions.length > 1 && (
+                                            <span className="px-2 py-1 bg-gray-500/20 text-gray-300 text-xs rounded-md">
+                                              ({rule.match_type})
+                                            </span>
+                                          )}
+                                        </div>
+                                        {/* Actions */}
+                                        <div className="flex flex-wrap gap-2">
+                                          <span className="text-xs font-medium text-green-400 uppercase">DO:</span>
+                                          {rule.actions.map((a, i) => (
+                                            <span key={i} className="px-2 py-1 bg-green-500/20 text-green-300 text-xs rounded-md">
+                                              {a.type}: {a.value.substring(0, 30)}{a.value.length > 30 ? '...' : ''}
+                                            </span>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    </div>
+                                    <button
+                                      onClick={() => deleteRule(rule.rule_id)}
+                                      disabled={deletingRuleId === rule.rule_id}
+                                      className="ml-4 p-2 text-gray-400 hover:text-red-400 transition-colors disabled:opacity-50"
+                                    >
+                                      {deletingRuleId === rule.rule_id ? (
+                                        <svg className="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
+                                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                        </svg>
+                                      ) : (
+                                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                        </svg>
+                                      )}
+                                    </button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
 
                           {/* How Rules Work */}
                           <div className="mt-8">
@@ -2504,17 +3238,17 @@ Maintain professionalism while being friendly and approachable."
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                               <div className="bg-[#2a2a2a] rounded-lg p-4 border border-[#bc6cd3]/10">
                                 <div className="w-10 h-10 bg-blue-500/20 rounded-lg flex items-center justify-center mb-3">
-                                  <span className="text-blue-400 font-bold">IF</span>
+                                  <span className="text-blue-400 font-bold">WHEN</span>
                                 </div>
                                 <h4 className="text-white font-medium mb-1">Condition</h4>
                                 <p className="text-gray-400 text-sm">Set triggers like keywords, intents, or sentiment</p>
                               </div>
                               <div className="bg-[#2a2a2a] rounded-lg p-4 border border-[#bc6cd3]/10">
                                 <div className="w-10 h-10 bg-green-500/20 rounded-lg flex items-center justify-center mb-3">
-                                  <span className="text-green-400 font-bold">THEN</span>
+                                  <span className="text-green-400 font-bold">DO</span>
                                 </div>
                                 <h4 className="text-white font-medium mb-1">Action</h4>
-                                <p className="text-gray-400 text-sm">Define responses, API calls, or tasks to execute</p>
+                                <p className="text-gray-400 text-sm">Define responses or behaviors to execute</p>
                               </div>
                               <div className="bg-[#2a2a2a] rounded-lg p-4 border border-[#bc6cd3]/10">
                                 <div className="w-10 h-10 bg-purple-500/20 rounded-lg flex items-center justify-center mb-3">
@@ -2524,55 +3258,6 @@ Maintain professionalism while being friendly and approachable."
                                 </div>
                                 <h4 className="text-white font-medium mb-1">Result</h4>
                                 <p className="text-gray-400 text-sm">Your agent responds intelligently and automatically</p>
-                              </div>
-                            </div>
-                          </div>
-
-                          {/* Condition Types */}
-                          <div className="mt-8">
-                            <h3 className="text-lg font-semibold text-white mb-4">Available Conditions</h3>
-                            <div className="space-y-3">
-                              <div className="flex items-center gap-4 bg-[#2a2a2a] rounded-lg p-4 border border-[#bc6cd3]/10 hover:border-[#bc6cd3]/30 transition-colors cursor-pointer">
-                                <div className="w-10 h-10 bg-yellow-500/20 rounded-lg flex items-center justify-center">
-                                  <svg className="w-5 h-5 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 20l4-16m2 16l4-16M6 9h14M4 15h14" />
-                                  </svg>
-                                </div>
-                                <div className="flex-1">
-                                  <h4 className="text-white font-medium">Keyword Detection</h4>
-                                  <p className="text-gray-400 text-sm">Trigger when specific words or phrases are mentioned</p>
-                                </div>
-                                <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                                </svg>
-                              </div>
-                              <div className="flex items-center gap-4 bg-[#2a2a2a] rounded-lg p-4 border border-[#bc6cd3]/10 hover:border-[#bc6cd3]/30 transition-colors cursor-pointer">
-                                <div className="w-10 h-10 bg-blue-500/20 rounded-lg flex items-center justify-center">
-                                  <svg className="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-                                  </svg>
-                                </div>
-                                <div className="flex-1">
-                                  <h4 className="text-white font-medium">Intent Detection</h4>
-                                  <p className="text-gray-400 text-sm">Trigger based on user&apos;s intent (e.g., booking, complaint)</p>
-                                </div>
-                                <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                                </svg>
-                              </div>
-                              <div className="flex items-center gap-4 bg-[#2a2a2a] rounded-lg p-4 border border-[#bc6cd3]/10 hover:border-[#bc6cd3]/30 transition-colors cursor-pointer">
-                                <div className="w-10 h-10 bg-pink-500/20 rounded-lg flex items-center justify-center">
-                                  <svg className="w-5 h-5 text-pink-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                                  </svg>
-                                </div>
-                                <div className="flex-1">
-                                  <h4 className="text-white font-medium">Sentiment Detection</h4>
-                                  <p className="text-gray-400 text-sm">Trigger based on user&apos;s mood (positive, negative, neutral)</p>
-                                </div>
-                                <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                                </svg>
                               </div>
                             </div>
                           </div>

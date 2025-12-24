@@ -482,24 +482,60 @@ class Knowledge(BaseModel):
     priority: int = Field(1, description="Priority (higher = more important)")
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
+# Rule Condition Types (WHEN dropdown options)
+class RuleConditionType(str, Enum):
+    CONVERSATION_STARTS = "Conversation starts"
+    USER_WANTS_TO = "User wants to"
+    USER_TALKS_ABOUT = "User talks about"
+    USER_ASKS_ABOUT = "User asks about"
+    USER_SENTIMENT_IS = "User sentiment is"
+    USER_PROVIDES = "User provides"
+    SENTENCE_CONTAINS = "The sentence contains"
+
+# Rule Action Types (DO dropdown options)
+class RuleActionType(str, Enum):
+    SAY_EXACT_MESSAGE = "Say exact message"
+    ALWAYS_INCLUDE = "Always include"
+    ALWAYS_TALK_ABOUT = "Always talk about"
+    TALK_ABOUT_MENTION = "Talk about/mention"
+    DONT_TALK_ABOUT = "Don't talk about/mention"
+    ASK_FOR_INFORMATION = "Ask for information"
+    FIND_IN_WEBSITE = "Find in website"
+    ANSWER_USING_KB = "Answer Using Knowledge Base"
+
+# Match Type for multiple conditions
+class RuleMatchType(str, Enum):
+    ANY = "ANY"  # OR logic - any condition matches
+    ALL = "ALL"  # AND logic - all conditions must match
+
 class RuleCondition(BaseModel):
-    type: str = Field(..., description="Condition type: keyword, intent, sentiment")
-    value: Union[str, Dict[str, Any]] = Field(..., description="Condition value")
+    type: str = Field(..., description="Condition type from RuleConditionType enum")
+    value: str = Field("", description="Condition value (empty for 'Conversation starts')")
 
 class RuleAction(BaseModel):
-    type: str = Field(..., description="Action type: respond, redirect, etc.")
-    value: Union[str, Dict[str, Any]] = Field(..., description="Action value")
+    type: str = Field(..., description="Action type from RuleActionType enum")
+    value: str = Field(..., description="Action value/content")
 
 class Rule(BaseModel):
     rule_id: str = Field(..., description="Unique rule identifier")
     agent_id: str = Field(..., description="Agent ID this rule belongs to")
-    name: str = Field(..., description="Rule name")
-    when: RuleCondition = Field(..., description="WHEN condition")
-    do: RuleAction = Field(..., description="DO action")
+    name: str = Field("", description="Rule name (auto-generated if empty)")
+    conditions: List[RuleCondition] = Field(..., description="List of WHEN conditions")
+    match_type: RuleMatchType = Field(RuleMatchType.ANY, description="Match type: ANY (OR) or ALL (AND)")
+    actions: List[RuleAction] = Field(..., description="List of DO actions")
     priority: int = Field(1, description="Rule priority (higher = evaluated first)")
     active: bool = Field(True, description="Whether rule is active")
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    
+    # Backward compatibility - expose first condition/action as 'when'/'do'
+    @property
+    def when(self) -> Optional[RuleCondition]:
+        return self.conditions[0] if self.conditions else None
+    
+    @property
+    def do(self) -> Optional[RuleAction]:
+        return self.actions[0] if self.actions else None
 
 class ChatLog(BaseModel):
     chat_id: str = Field(..., description="Unique chat log identifier")
@@ -564,9 +600,10 @@ class KnowledgeResponse(BaseModel):
 
 class RuleSaveRequest(BaseModel):
     agent_id: str = Field(..., description="Agent ID")
-    name: str = Field(..., description="Rule name")
-    when: RuleCondition = Field(..., description="WHEN condition")
-    do: RuleAction = Field(..., description="DO action")
+    name: str = Field("", description="Rule name (auto-generated if empty)")
+    conditions: List[RuleCondition] = Field(..., description="List of WHEN conditions")
+    match_type: str = Field("ANY", description="Match type: ANY (OR) or ALL (AND)")
+    actions: List[RuleAction] = Field(..., description="List of DO actions")
     priority: int = Field(1, description="Rule priority")
 
 class RuleResponse(BaseModel):

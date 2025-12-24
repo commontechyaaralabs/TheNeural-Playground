@@ -63,39 +63,64 @@ class ChatService:
             if not persona:
                 raise ValueError(f"Persona not found for agent: {request.agent_id}")
             
-            # Step 1: Detect conditions
+            # Step 1: Detect conditions and build context
             conditions = self._detect_conditions(request.message)
+            
+            # Check if this is the first message (conversation start)
+            conversation_history = self._get_recent_conversation(
+                request.agent_id, 
+                request.session_id, 
+                limit=1
+            )
+            is_conversation_start = len(conversation_history) == 0
+            
+            # Build context for rule evaluation
+            rule_context = {
+                "intent": conditions.get("intent", {}),
+                "sentiment": conditions.get("sentiment", {}),
+                "keywords": conditions.get("keywords", []),
+                "is_conversation_start": is_conversation_start
+            }
             
             # Convert conditions dict to list of dicts for ChatLog model
             trace["conditions_detected"] = [
                 {"type": "intent", "data": conditions.get("intent", {})},
                 {"type": "sentiment", "data": conditions.get("sentiment", {})},
-                {"type": "keywords", "data": conditions.get("keywords", [])}
+                {"type": "keywords", "data": conditions.get("keywords", [])},
+                {"type": "is_conversation_start", "data": is_conversation_start}
             ]
             
-            # Step 2: Evaluate rules (pass conditions dict as-is for rule evaluation)
+            # Step 2: Evaluate rules (pass context dict for rule evaluation)
             matched_rule = self.rules_service.evaluate_rules(
                 request.agent_id,
                 request.message,
-                conditions
+                rule_context
             )
             
             response = ""
             llm_used = False
+            rule_action_results = None
             
             if matched_rule:
-                # Step 3: Rule matched - execute action
+                # Step 3: Rule matched - execute actions
+                logger.info(f"✅ Rule matched: {matched_rule.rule_id} - '{matched_rule.name}'")
                 trace["rule_matched"] = matched_rule.rule_id
-                response = self._execute_rule_action(matched_rule, request.message)
+                rule_action_results = self.rules_service.execute_actions(matched_rule, request.message, rule_context)
                 
-                # Check if we should skip LLM
-                if matched_rule.do.type == "skip_llm":
+                logger.info(f"📋 Rule action results: {rule_action_results}")
+                
+                # Check if we have an exact response (skip LLM)
+                if rule_action_results.get("exact_response"):
+                    response = rule_action_results["exact_response"]
                     llm_used = False
+                    logger.info(f"📢 Using exact response (skipping LLM)")
                 else:
-                    # Still use LLM for response generation
+                    # Use LLM but with rule constraints
                     llm_used = True
-            else:
-                # Step 4: No rule matched - use KB + LLM with conversation context
+                    logger.info(f"🤖 Using LLM with rule constraints: talk_about={rule_action_results.get('talk_about')}")
+            
+            if llm_used or not matched_rule:
+                # Step 4: Use KB + LLM (with rule constraints if matched)
                 llm_used = True
                 
                 # Get conversation history for context
@@ -108,29 +133,65 @@ class ChatService:
                 # Embed message
                 message_embedding = self.vertex_ai.generate_embedding(request.message)
                 
+                # Check if rule says to use KB
+                force_kb = rule_action_results.get("use_kb", False) if rule_action_results else False
+                kb_source = rule_action_results.get("kb_source") if rule_action_results else None
+                
                 # Retrieve relevant knowledge (threshold=0.5 for better recall)
                 knowledge_items = self.knowledge_service.retrieve_knowledge(
                     request.agent_id,
                     message_embedding,
-                    top_k=5,
-                    similarity_threshold=0.5  # Lower threshold for short queries
+                    top_k=10 if kb_source else 5,  # Get more if filtering
+                    similarity_threshold=0.3 if kb_source else 0.5  # Lower threshold if filtering
                 )
                 
+                # Filter by specific KB source if provided
+                if kb_source:
+                    original_count = len(knowledge_items)
+                    filtered_items = []
+                    
+                    for kb in knowledge_items:
+                        metadata = kb.metadata or {}
+                        
+                        if kb_source["type"] == "file":
+                            # Filter by file name
+                            if metadata.get("file_name") == kb_source["name"]:
+                                filtered_items.append(kb)
+                        
+                        elif kb_source["type"] == "link":
+                            # Filter by page title or URL
+                            page_title = metadata.get("page_title", "")
+                            url = metadata.get("url", "")
+                            if kb_source["name"] == page_title or kb_source["name"] in url:
+                                filtered_items.append(kb)
+                        
+                        elif kb_source["type"] == "text":
+                            # Filter by content match (for text KB)
+                            if not metadata.get("file_name") and not metadata.get("url"):
+                                # This is text knowledge (no file or link metadata)
+                                if kb_source["content"] in kb.content[:60]:
+                                    filtered_items.append(kb)
+                    
+                    knowledge_items = filtered_items[:5]  # Limit to top 5 after filtering
+                    logger.info(f"📚 Filtered KB from {original_count} to {len(knowledge_items)} items (source: {kb_source['type']})")
+                
                 trace["kb_used"] = [kb.knowledge_id for kb in knowledge_items]
+                trace["kb_source_filter"] = kb_source
                 trace["conversation_context_used"] = len(conversation_history)
                 
-                # DYNAMIC GROUNDING: Enable web search if KB has no relevant results
-                enable_web_search = len(knowledge_items) == 0
+                # DYNAMIC GROUNDING: Enable web search if KB has no relevant results (unless rule says use KB)
+                enable_web_search = len(knowledge_items) == 0 and not force_kb
                 if enable_web_search:
                     logger.info("🌐 No KB matches found - enabling Google Search Grounding for web search")
                 
-                # Build prompt with persona, knowledge, and conversation history
+                # Build prompt with persona, knowledge, conversation history, and rule constraints
                 prompt = self._build_prompt_with_confidence(
                     persona, 
                     request.message, 
                     knowledge_items,
                     conversation_history,
-                    enable_web_search=enable_web_search  # Tell prompt builder about search mode
+                    enable_web_search=enable_web_search,
+                    rule_constraints=rule_action_results  # Pass rule action results as constraints
                 )
                 
                 # Generate response using Vertex AI (with optional web search)
@@ -270,6 +331,7 @@ class ChatService:
         try:
             intent_data = self.vertex_ai.detect_intent(message)
             conditions["intent"] = intent_data
+            logger.info(f"🎯 Detected intent: {intent_data}")
         except Exception as e:
             logger.warning(f"Failed to detect intent: {e}")
             conditions["intent"] = {"intent": "unknown", "confidence": 0.0}
@@ -278,6 +340,7 @@ class ChatService:
         try:
             sentiment_data = self.vertex_ai.detect_sentiment(message)
             conditions["sentiment"] = sentiment_data
+            logger.info(f"😊 Detected sentiment: {sentiment_data}")
         except Exception as e:
             logger.warning(f"Failed to detect sentiment: {e}")
             conditions["sentiment"] = {"sentiment": "neutral", "score": 0.0}
@@ -440,7 +503,7 @@ Remember:
         # Don't append sources as text - frontend handles display via web_sources in trace
         return response
     
-    def _build_prompt_with_confidence(self, persona: Persona, message: str, knowledge_items: List[Knowledge], conversation_history: List[Dict[str, str]] = None, enable_web_search: bool = False) -> str:
+    def _build_prompt_with_confidence(self, persona: Persona, message: str, knowledge_items: List[Knowledge], conversation_history: List[Dict[str, str]] = None, enable_web_search: bool = False, rule_constraints: Dict[str, Any] = None) -> str:
         """Build prompt that asks LLM to provide confidence score with response and follow-up questions"""
         
         # Map response_length to actual instructions
@@ -479,6 +542,42 @@ LANGUAGE: {persona.language}
 === CUSTOM GUIDELINES ===
 {guidelines}
 """
+        
+        # Add rule-based constraints if any
+        if rule_constraints:
+            prompt += """
+=== RULE-BASED CONSTRAINTS (MUST FOLLOW) ===
+A rule has been triggered. You MUST follow these constraints:
+"""
+            
+            # Always include content
+            if rule_constraints.get("include_always"):
+                prompt += "\n🔒 ALWAYS INCLUDE in your response:\n"
+                for content in rule_constraints["include_always"]:
+                    prompt += f"- {content}\n"
+            
+            # Topics to talk about
+            if rule_constraints.get("talk_about"):
+                prompt += "\n🎯 CRITICAL - YOU MUST FOCUS ONLY ON these topics:\n"
+                for topic in rule_constraints["talk_about"]:
+                    prompt += f"- {topic}\n"
+                prompt += "\n⚠️ IMPORTANT: You MUST talk ONLY about the topics above. Do NOT mention other related topics. Stay strictly focused on what's specified.\n"
+            
+            # Topics to avoid
+            if rule_constraints.get("dont_talk_about"):
+                prompt += "\n🚫 DO NOT mention or discuss these topics:\n"
+                for topic in rule_constraints["dont_talk_about"]:
+                    prompt += f"- {topic}\n"
+            
+            # Information to ask for
+            if rule_constraints.get("ask_for"):
+                prompt += "\n❓ ASK the user for this information:\n"
+                for info in rule_constraints["ask_for"]:
+                    prompt += f"- {info}\n"
+            
+            # Force KB usage
+            if rule_constraints.get("use_kb"):
+                prompt += "\n📚 You MUST answer using ONLY the Knowledge Base information provided below. Do NOT use general knowledge.\n"
         
         # Add conversation history for context
         if conversation_history and len(conversation_history) > 0:

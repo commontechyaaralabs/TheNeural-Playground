@@ -50,3 +50,18 @@ async def get_rules(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@router.delete("/{rule_id}")
+async def delete_rule(
+    rule_id: str,
+    rules_service: RulesService = Depends(get_rules_service)
+):
+    """
+    Delete a rule by ID.
+    """
+    try:
+        success = rules_service.delete_rule(rule_id)
+        return {"success": success, "message": f"Rule {rule_id} deleted"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
