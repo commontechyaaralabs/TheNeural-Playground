@@ -323,7 +323,7 @@ class ApiService {
 
   // Guest API
   async createGuestSession(guestData: Partial<GuestSession>): Promise<ApiResponse<GuestSession>> {
-    return this.request<GuestSession>('/guests', {
+    return this.request<GuestSession>('/api/guests/session', {
       method: 'POST',
       body: JSON.stringify(guestData),
     });

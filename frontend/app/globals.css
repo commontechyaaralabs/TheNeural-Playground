@@ -18,7 +18,7 @@
 
 html, body {
   height: 100%;
-  overflow: hidden; /* Prevent page-level scrolling */
+  overflow: auto; /* Allow page-level scrolling */
 }
 
 body {
@@ -51,6 +51,30 @@ body {
 .dark-scrollbar {
   scrollbar-width: thin;
   scrollbar-color: #3a3a3a #1c1c1c;
+}
+
+/* Global page scrollbar styling */
+html {
+  scrollbar-width: thin;
+  scrollbar-color: #3a3a3a #1c1c1c;
+}
+
+html::-webkit-scrollbar {
+  width: 10px;
+}
+
+html::-webkit-scrollbar-track {
+  background: #1c1c1c;
+  border-radius: 4px;
+}
+
+html::-webkit-scrollbar-thumb {
+  background: #3a3a3a;
+  border-radius: 4px;
+}
+
+html::-webkit-scrollbar-thumb:hover {
+  background: #4a4a4a;
 }
 
 /* Chat history scrollbar - visible thin scrollbar */
