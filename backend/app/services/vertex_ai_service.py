@@ -26,16 +26,56 @@ class VertexAIService:
             location=location,
         )
         
-        # Model name for Gemini 2.5 Pro
-        self.model_name = "gemini-2.5-pro"
+        # Model name - default to gemini-2.5-flash-lite (can be overridden by agent settings)
+        self.model_name = "gemini-2.5-flash-lite"
         
         # Initialize embedding model (still using vertexai for embeddings)
         from google.cloud import aiplatform
         aiplatform.init(project=project_id, location=location)
-        # Using text-embedding-004 which is the latest stable embedding model
-        self.embedding_model = TextEmbeddingModel.from_pretrained("text-embedding-004")
+        # Default embedding model (can be overridden by agent settings)
+        self.default_embedding_model_name = "text-embedding-005"
+        self.embedding_model = None  # Will be loaded dynamically based on settings
         
         logger.info(f"✅ Vertex AI service initialized for project: {project_id}, location: {location}")
+    
+    def _get_embedding_model(self, embedding_model_name: Optional[str] = None) -> TextEmbeddingModel:
+        """Get embedding model instance, loading it if needed"""
+        model_name = embedding_model_name or self.default_embedding_model_name
+        
+        # Map model names to Vertex AI model names
+        # Note: Vertex AI uses different naming conventions
+        model_mapping = {
+            "text-embedding-005": "text-embedding-005",  # Vertex AI model name
+            "text-embedding-004": "text-embedding-004",  # Vertex AI model name
+            "gemini-embedding-001": "textembedding-gecko@001",  # Gemini embedding model
+            "text-multilingual-embedding-002": "text-multilingual-embedding-002"  # Multilingual model
+        }
+        
+        # Use mapped name or fallback to the provided name
+        vertex_model_name = model_mapping.get(model_name, model_name)
+        
+        # Log which embedding model is being used
+        logger.info(f"🔤 Using embedding model: {model_name} (Vertex AI: {vertex_model_name})")
+        
+        # Return cached model if it's the same, otherwise load new one
+        if self.embedding_model is None or getattr(self, '_current_embedding_model_name', None) != vertex_model_name:
+            try:
+                self.embedding_model = TextEmbeddingModel.from_pretrained(vertex_model_name)
+                self._current_embedding_model_name = vertex_model_name
+                logger.info(f"📦 Successfully loaded embedding model: {model_name}")
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to load embedding model {model_name}, falling back to default: {e}")
+                # Fallback to default
+                try:
+                    fallback_name = model_mapping.get(self.default_embedding_model_name, "text-embedding-005")
+                    self.embedding_model = TextEmbeddingModel.from_pretrained(fallback_name)
+                    self._current_embedding_model_name = fallback_name
+                    logger.info(f"📦 Using fallback embedding model: {self.default_embedding_model_name}")
+                except Exception as fallback_error:
+                    logger.error(f"❌ Failed to load fallback embedding model: {fallback_error}")
+                    raise
+        
+        return self.embedding_model
     
     def generate_agent_specification(self, agent_description: str) -> Dict[str, str]:
         """
@@ -99,25 +139,39 @@ Return ONLY a valid JSON object, no other text. Example format:
             logger.error(f"❌ Failed to generate agent specification: {e}")
             raise Exception(f"Failed to generate agent specification: {str(e)}")
     
-    def generate_text(self, prompt: str, max_tokens: int = 1000) -> str:
-        """Generate text using Gemini 2.5 Pro"""
+    def generate_text(self, prompt: str, max_tokens: int = 1000, model_name: Optional[str] = None) -> str:
+        """Generate text using specified model or default"""
         try:
+            model = model_name or self.model_name
+            logger.info(f"🤖 Using model: {model}")
+            
+            # Validate model name
+            valid_models = ["gemini-2.5-flash-lite", "gemini-2.5-pro"]
+            if model not in valid_models:
+                logger.warning(f"⚠️ Model '{model}' not in known valid models list, but attempting to use it anyway")
+            
             response = self.client.models.generate_content(
-                model=self.model_name,
+                model=model,
                 contents=prompt
             )
             return response.text.strip()
         except Exception as e:
-            logger.error(f"❌ Failed to generate text: {e}")
-            raise Exception(f"Failed to generate text: {str(e)}")
+            error_msg = str(e)
+            logger.error(f"❌ Failed to generate text with model '{model_name or self.model_name}': {error_msg}")
+            
+            # Provide more helpful error message for model-related errors
+            if "model" in error_msg.lower() or "not found" in error_msg.lower():
+                raise Exception(f"Model '{model_name or self.model_name}' may not be available. Supported models: gemini-2.5-flash-lite, gemini-2.5-pro. Error: {error_msg}")
+            raise Exception(f"Failed to generate text: {error_msg}")
     
-    def generate_text_with_search(self, prompt: str, enable_search: bool = False) -> Dict[str, Any]:
+    def generate_text_with_search(self, prompt: str, enable_search: bool = False, model_name: Optional[str] = None) -> Dict[str, Any]:
         """
-        Generate text using Gemini 2.5 Pro with optional Google Search Grounding.
+        Generate text using specified model or default with optional Google Search Grounding.
         
         Args:
             prompt: The prompt to send to the model
             enable_search: If True, enables Google Search Grounding for web search
+            model_name: Optional model name to use (defaults to self.model_name)
             
         Returns:
             Dict with:
@@ -126,6 +180,14 @@ Return ONLY a valid JSON object, no other text. Example format:
             - sources: List of web sources used (if grounding was used)
         """
         try:
+            model = model_name or self.model_name
+            logger.info(f"🤖 Using model: {model}")
+            
+            # Validate model name
+            valid_models = ["gemini-2.5-flash-lite", "gemini-2.5-pro"]
+            if model not in valid_models:
+                logger.warning(f"⚠️ Model '{model}' not in known valid models list, but attempting to use it anyway")
+            
             config = None
             if enable_search:
                 logger.info("🔍 Google Search Grounding ENABLED - will search web if needed")
@@ -134,7 +196,7 @@ Return ONLY a valid JSON object, no other text. Example format:
                 )
             
             response = self.client.models.generate_content(
-                model=self.model_name,
+                model=model,
                 contents=prompt,
                 config=config
             )
@@ -228,12 +290,19 @@ Return ONLY a valid JSON object, no other text. Example format:
             return result
             
         except Exception as e:
-            logger.error(f"❌ Failed to generate text with search: {e}")
-            raise Exception(f"Failed to generate text with search: {str(e)}")
+            error_msg = str(e)
+            logger.error(f"❌ Failed to generate text with search using model '{model_name or self.model_name}': {error_msg}")
+            
+            # Provide more helpful error message for model-related errors
+            if "model" in error_msg.lower() or "not found" in error_msg.lower():
+                raise Exception(f"Model '{model_name or self.model_name}' may not be available. Supported models: gemini-2.5-flash-lite, gemini-2.5-pro. Error: {error_msg}")
+            raise Exception(f"Failed to generate text with search: {error_msg}")
     
-    def detect_intent(self, message: str) -> Dict[str, Any]:
+    def detect_intent(self, message: str, model_name: Optional[str] = None) -> Dict[str, Any]:
         """Detect intent from user message"""
         try:
+            model = model_name or self.model_name
+            logger.info(f"🤖 Using model for intent detection: {model}")
             prompt = f"""Analyze the following user message and determine the intent.
 
 Message: {message}
@@ -246,7 +315,7 @@ Return a JSON object with:
 Return ONLY a valid JSON object, no other text."""
 
             response = self.client.models.generate_content(
-                model=self.model_name,
+                model=model,
                 contents=prompt
             )
             response_text = response.text.strip()
@@ -276,9 +345,11 @@ Return ONLY a valid JSON object, no other text."""
                 "keywords": []
             }
     
-    def detect_sentiment(self, message: str) -> Dict[str, Any]:
+    def detect_sentiment(self, message: str, model_name: Optional[str] = None) -> Dict[str, Any]:
         """Detect sentiment from user message"""
         try:
+            model = model_name or self.model_name
+            logger.info(f"🤖 Using model for sentiment detection: {model}")
             prompt = f"""Analyze the sentiment of the following message.
 
 Message: {message}
@@ -291,7 +362,7 @@ Return a JSON object with:
 Return ONLY a valid JSON object, no other text."""
 
             response = self.client.models.generate_content(
-                model=self.model_name,
+                model=model,
                 contents=prompt
             )
             response_text = response.text.strip()
@@ -321,19 +392,25 @@ Return ONLY a valid JSON object, no other text."""
                 "magnitude": 0.0
             }
     
-    def generate_embedding(self, text: str) -> List[float]:
+    def generate_embedding(self, text: str, embedding_model_name: Optional[str] = None) -> List[float]:
         """Generate embedding for text using Vertex AI"""
         try:
-            embeddings = self.embedding_model.get_embeddings([text])
+            model = self._get_embedding_model(embedding_model_name)
+            if embedding_model_name:
+                logger.info(f"🔤 Using embedding model: {embedding_model_name}")
+            embeddings = model.get_embeddings([text])
             return embeddings[0].values
         except Exception as e:
             logger.error(f"❌ Failed to generate embedding: {e}")
             raise Exception(f"Failed to generate embedding: {str(e)}")
     
-    def generate_embeddings_batch(self, texts: List[str]) -> List[List[float]]:
+    def generate_embeddings_batch(self, texts: List[str], embedding_model_name: Optional[str] = None) -> List[List[float]]:
         """Generate embeddings for multiple texts"""
         try:
-            embeddings = self.embedding_model.get_embeddings(texts)
+            model = self._get_embedding_model(embedding_model_name)
+            if embedding_model_name:
+                logger.info(f"🔤 Using embedding model: {embedding_model_name} (batch: {len(texts)} texts)")
+            embeddings = model.get_embeddings(texts)
             return [emb.values for emb in embeddings]
         except Exception as e:
             logger.error(f"❌ Failed to generate embeddings batch: {e}")
@@ -358,3 +435,59 @@ Return ONLY a valid JSON object, no other text."""
         except Exception as e:
             logger.error(f"❌ Failed to calculate cosine similarity: {e}")
             return 0.0
+    
+    def euclidean_distance(self, vec1: List[float], vec2: List[float]) -> float:
+        """Calculate Euclidean distance between two vectors (converted to similarity: 1 / (1 + distance))"""
+        try:
+            import numpy as np
+            
+            vec1_np = np.array(vec1)
+            vec2_np = np.array(vec2)
+            
+            # Calculate Euclidean distance
+            distance = np.linalg.norm(vec1_np - vec2_np)
+            
+            # Convert distance to similarity (0-1 scale, where 1 = identical, 0 = very different)
+            # Using 1 / (1 + distance) to normalize
+            similarity = 1.0 / (1.0 + distance)
+            
+            return float(similarity)
+        except Exception as e:
+            logger.error(f"❌ Failed to calculate euclidean distance: {e}")
+            return 0.0
+    
+    def jaccard_similarity(self, vec1: List[float], vec2: List[float]) -> float:
+        """Calculate Jaccard similarity between two vectors (using binarized vectors)"""
+        try:
+            import numpy as np
+            
+            vec1_np = np.array(vec1)
+            vec2_np = np.array(vec2)
+            
+            # Binarize vectors (convert to binary: > 0 = 1, <= 0 = 0)
+            vec1_binary = (vec1_np > 0).astype(int)
+            vec2_binary = (vec2_np > 0).astype(int)
+            
+            # Calculate intersection and union
+            intersection = np.sum(vec1_binary & vec2_binary)
+            union = np.sum(vec1_binary | vec2_binary)
+            
+            if union == 0:
+                return 0.0
+            
+            # Jaccard similarity = intersection / union
+            return float(intersection / union)
+        except Exception as e:
+            logger.error(f"❌ Failed to calculate jaccard similarity: {e}")
+            return 0.0
+    
+    def calculate_similarity(self, vec1: List[float], vec2: List[float], method: str = "Cosine similarity") -> float:
+        """Calculate similarity using the specified method"""
+        method_lower = method.lower()
+        
+        if "euclidean" in method_lower:
+            return self.euclidean_distance(vec1, vec2)
+        elif "jaccard" in method_lower:
+            return self.jaccard_similarity(vec1, vec2)
+        else:  # Default to cosine similarity
+            return self.cosine_similarity(vec1, vec2)

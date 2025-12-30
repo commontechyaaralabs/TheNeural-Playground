@@ -8,6 +8,7 @@ from google.cloud import firestore
 
 from ..models import Rule, RuleSaveRequest, RuleCondition, RuleAction, RuleMatchType
 from ..config import gcp_clients
+from .agent_service import AgentService
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,9 @@ class RulesService:
                 logger.info("✅ RulesService initialized with code-based matching only")
         else:
             logger.info("✅ RulesService initialized with code-based matching only")
+        
+        # Initialize Agent Service for loading settings
+        self.agent_service = AgentService()
     
     def save_rule(self, request: RuleSaveRequest) -> Rule:
         """Create or update a rule with multiple conditions and actions"""
@@ -80,8 +84,20 @@ class RulesService:
                 if not self._validate_action(action):
                     raise ValueError(f"Invalid action: {action.type}")
             
-            # Generate rule ID
-            rule_id = f"RULE_{uuid.uuid4().hex[:12].upper()}"
+            # Use provided rule_id for updates, or generate new one
+            is_update = request.rule_id is not None
+            rule_id = request.rule_id if is_update else f"RULE_{uuid.uuid4().hex[:12].upper()}"
+            
+            # Get existing rule data if updating
+            existing_created_at = None
+            existing_active = True
+            if is_update:
+                existing_rule_ref = self.rules_collection.document(rule_id)
+                existing_rule_doc = existing_rule_ref.get()
+                if existing_rule_doc.exists:
+                    existing_data = existing_rule_doc.to_dict()
+                    existing_created_at = existing_data.get("created_at")
+                    existing_active = existing_data.get("active", True)
             
             # Auto-generate name if empty
             name = request.name
@@ -99,14 +115,19 @@ class RulesService:
                 "match_type": request.match_type,
                 "actions": [a.model_dump() for a in request.actions],
                 "priority": request.priority,
-                "active": True,
-                "created_at": datetime.now(timezone.utc),
+                "active": existing_active if is_update else True,
                 "updated_at": datetime.now(timezone.utc)
             }
             
-            # Save to Firestore
+            # Set created_at - use existing for updates, new timestamp for creates
+            if is_update and existing_created_at:
+                rule_data["created_at"] = existing_created_at
+            else:
+                rule_data["created_at"] = datetime.now(timezone.utc)
+            
+            # Save to Firestore (set with merge to preserve existing fields during update)
             rule_ref = self.rules_collection.document(rule_id)
-            rule_ref.set(rule_data)
+            rule_ref.set(rule_data, merge=is_update)
             
             logger.info(f"✅ Rule saved: {rule_id} with {len(request.conditions)} conditions and {len(request.actions)} actions")
             
@@ -119,7 +140,7 @@ class RulesService:
                 match_type=RuleMatchType(request.match_type),
                 actions=[RuleAction(**a) for a in rule_data["actions"]],
                 priority=request.priority,
-                active=True,
+                active=rule_data["active"],
                 created_at=rule_data["created_at"],
                 updated_at=rule_data["updated_at"]
             )
@@ -169,9 +190,10 @@ class RulesService:
             return False
     
     def get_rules(self, agent_id: str) -> List[Rule]:
-        """Get all rules for an agent, sorted by priority"""
+        """Get all rules for an agent (both active and inactive), sorted by priority"""
         try:
-            rules_refs = self.rules_collection.where('agent_id', '==', agent_id).where('active', '==', True).stream()
+            # Get ALL rules for the agent (including disabled ones)
+            rules_refs = self.rules_collection.where('agent_id', '==', agent_id).stream()
             
             rules = []
             for rule_doc in rules_refs:
@@ -229,6 +251,23 @@ class RulesService:
             logger.error(f"❌ Failed to delete rule: {e}")
             raise Exception(f"Failed to delete rule: {str(e)}")
     
+    def update_rule_status(self, rule_id: str, active: bool) -> bool:
+        """Enable or disable a rule"""
+        try:
+            rule_ref = self.rules_collection.document(rule_id)
+            rule_ref.update({
+                "active": active,
+                "updated_at": datetime.now(timezone.utc)
+            })
+            
+            status = "enabled" if active else "disabled"
+            logger.info(f"✅ Rule {rule_id} {status}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to update rule status: {e}")
+            raise Exception(f"Failed to update rule status: {str(e)}")
+    
     def evaluate_rules(self, agent_id: str, message: str, context: Dict[str, Any]) -> Optional[Rule]:
         """
         Evaluate rules against message and context using LLM-based matching.
@@ -250,7 +289,11 @@ class RulesService:
             
             # Try LLM-based matching first (smarter, understands context)
             if self.vertex_ai:
-                matched_rule = self._evaluate_rules_with_llm(rules, message, context)
+                # Load agent settings to get model configuration
+                settings = self.agent_service.get_settings(agent_id)
+                model_name = settings.model if settings else None
+                logger.info(f"📋 RulesService using model from settings: {model_name}")
+                matched_rule = self._evaluate_rules_with_llm(rules, message, context, model_name=model_name)
                 if matched_rule:
                     return matched_rule
                 logger.info("🤖 LLM found no matching rules, trying code-based fallback...")
@@ -267,7 +310,7 @@ class RulesService:
             logger.error(f"❌ Failed to evaluate rules: {e}")
             return None
     
-    def _evaluate_rules_with_llm(self, rules: List[Rule], message: str, context: Dict[str, Any]) -> Optional[Rule]:
+    def _evaluate_rules_with_llm(self, rules: List[Rule], message: str, context: Dict[str, Any], model_name: Optional[str] = None) -> Optional[Rule]:
         """
         Use Gemini to intelligently match rules against the user's message.
         This understands context, synonyms, sentiment, and meaning - not just keywords.
@@ -326,7 +369,8 @@ Return 0 for matched_rule if no rule clearly applies. Be smart about matching - 
             # Call Gemini for rule matching
             logger.info(f"🤖 Asking Gemini to match {len(rules)} rules against message: '{message[:50]}...'")
             
-            response = self.vertex_ai.generate_text(prompt)
+            # Use model from settings if available
+            response = self.vertex_ai.generate_text(prompt, model_name=model_name)
             
             # Parse the response
             try:

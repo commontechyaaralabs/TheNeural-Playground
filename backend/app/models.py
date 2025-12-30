@@ -1,5 +1,5 @@
-from pydantic import BaseModel, Field, ConfigDict
-from typing import List, Optional, Union, Dict, Any
+from pydantic import BaseModel, Field, ConfigDict, field_validator, model_validator
+from typing import List, Optional, Union, Dict, Any, ClassVar
 from datetime import datetime, timezone, timedelta
 from enum import Enum
 
@@ -466,6 +466,46 @@ class PersonaUpdateResponse(BaseModel):
     persona: Persona
     message: str = "Persona updated successfully"
 
+class AgentSettings(BaseModel):
+    agent_id: str = Field(..., description="Agent ID this settings belongs to")
+    model: str = Field("gemini-2.5-flash-lite", description="Model name (e.g., gemini-2.5-flash-lite, gemini-2.5-pro)")
+    embedding_model: str = Field("text-embedding-005", description="Embedding model name")
+    similarity: str = Field("Cosine similarity", description="Similarity method (Cosine similarity, Euclidean Distance, Jaccard Similarity)")
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    
+    # Valid model names
+    VALID_MODELS: ClassVar[List[str]] = ["gemini-2.5-flash-lite", "gemini-2.5-pro"]
+    
+    @field_validator('model')
+    @classmethod
+    def validate_model(cls, v):
+        """Validate that model name is one of the supported models"""
+        if v not in cls.VALID_MODELS:
+            raise ValueError(f"Invalid model name: {v}. Supported models: {', '.join(cls.VALID_MODELS)}")
+        return v
+
+class SettingsUpdateRequest(BaseModel):
+    model: Optional[str] = Field(None, description="Model name")
+    embedding_model: Optional[str] = Field(None, description="Embedding model name")
+    similarity: Optional[str] = Field(None, description="Similarity method")
+    
+    # Valid model names
+    VALID_MODELS: ClassVar[List[str]] = ["gemini-2.5-flash-lite", "gemini-2.5-pro"]
+    
+    @field_validator('model')
+    @classmethod
+    def validate_model(cls, v):
+        """Validate that model name is one of the supported models"""
+        if v is not None and v not in cls.VALID_MODELS:
+            raise ValueError(f"Invalid model name: {v}. Supported models: {', '.join(cls.VALID_MODELS)}")
+        return v
+
+class SettingsUpdateResponse(BaseModel):
+    success: bool = True
+    settings: AgentSettings
+    message: str = "Settings updated successfully"
+
 class KnowledgeType(str, Enum):
     TEXT = "text"
     FILE = "file"
@@ -510,7 +550,13 @@ class RuleMatchType(str, Enum):
 
 class RuleCondition(BaseModel):
     type: str = Field(..., description="Condition type from RuleConditionType enum")
-    value: str = Field("", description="Condition value (empty for 'Conversation starts')")
+    value: Optional[str] = Field("", description="Condition value (empty for 'Conversation starts')")
+    
+    @field_validator('value', mode='before')
+    @classmethod
+    def convert_none_to_empty(cls, v):
+        """Convert None values to empty string"""
+        return "" if v is None else v
 
 class RuleAction(BaseModel):
     type: str = Field(..., description="Action type from RuleActionType enum")
@@ -600,6 +646,7 @@ class KnowledgeResponse(BaseModel):
 
 class RuleSaveRequest(BaseModel):
     agent_id: str = Field(..., description="Agent ID")
+    rule_id: Optional[str] = Field(None, description="Rule ID for updates (omit for new rules)")
     name: str = Field("", description="Rule name (auto-generated if empty)")
     conditions: List[RuleCondition] = Field(..., description="List of WHEN conditions")
     match_type: str = Field("ANY", description="Match type: ANY (OR) or ALL (AND)")
@@ -644,3 +691,59 @@ class CleanupResponse(BaseModel):
     success: bool = True
     deleted_count: int
     message: str
+
+# Chat History Models (Playground AI-like)
+class ChatMessage(BaseModel):
+    """Individual chat message"""
+    message_id: str
+    role: str = Field(..., description="Message role: 'user' or 'assistant'")
+    content: str = Field(..., description="Message content")
+    created_at: datetime = Field(..., description="Message timestamp")
+    metadata: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Additional message metadata")
+
+class Chat(BaseModel):
+    """Chat session with messages"""
+    chat_id: str = Field(..., description="Unique chat identifier")
+    agent_id: str = Field(..., description="Associated agent ID")
+    session_id: str = Field(..., description="Session ID (for ongoing chat)")
+    messages: List[ChatMessage] = Field(default_factory=list, description="List of messages in this chat")
+    created_at: datetime = Field(..., description="Chat creation timestamp")
+    updated_at: datetime = Field(..., description="Last update timestamp")
+    is_active: bool = Field(True, description="True for ongoing chat, False for archived")
+    title: Optional[str] = Field(None, description="Optional chat title")
+    message_count: int = Field(0, description="Total number of messages")
+
+class CreateChatRequest(BaseModel):
+    """Request to create a new chat"""
+    agent_id: str = Field(..., description="Agent ID")
+    session_id: Optional[str] = Field(None, description="Optional session ID")
+
+class CreateChatResponse(BaseModel):
+    """Response after creating a chat"""
+    success: bool = True
+    chat: Chat
+
+class GetChatsResponse(BaseModel):
+    """Response for getting all chats"""
+    success: bool = True
+    chats: List[Chat]
+    ongoing_chat: Optional[Chat] = Field(None, description="The currently active chat")
+
+class GetChatResponse(BaseModel):
+    """Response for getting a single chat"""
+    success: bool = True
+    chat: Chat
+
+class ArchiveChatRequest(BaseModel):
+    """Request to archive a chat"""
+    chat_id: str = Field(..., description="Chat ID to archive")
+
+class ArchiveChatResponse(BaseModel):
+    """Response after archiving a chat"""
+    success: bool = True
+    message: str = "Chat archived successfully"
+
+class DeleteChatResponse(BaseModel):
+    """Response after deleting a chat"""
+    success: bool = True
+    message: str = "Chat deleted successfully"

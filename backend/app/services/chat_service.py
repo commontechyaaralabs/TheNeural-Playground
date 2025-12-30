@@ -63,8 +63,13 @@ class ChatService:
             if not persona:
                 raise ValueError(f"Persona not found for agent: {request.agent_id}")
             
+            # Load agent settings to get model configuration
+            settings = self.agent_service.get_settings(request.agent_id)
+            model_name = settings.model if settings else None
+            logger.info(f"📋 Using model from settings: {model_name}")
+            
             # Step 1: Detect conditions and build context
-            conditions = self._detect_conditions(request.message)
+            conditions = self._detect_conditions(request.message, model_name)
             
             # Check if this is the first message (conversation start)
             conversation_history = self._get_recent_conversation(
@@ -130,8 +135,10 @@ class ChatService:
                     limit=10  # Last 10 messages for context
                 )
                 
-                # Embed message
-                message_embedding = self.vertex_ai.generate_embedding(request.message)
+                # Embed message using embedding model from settings
+                embedding_model_name = settings.embedding_model if settings else None
+                logger.info(f"🔤 Using embedding model from settings: {embedding_model_name}")
+                message_embedding = self.vertex_ai.generate_embedding(request.message, embedding_model_name=embedding_model_name)
                 
                 # Check if rule says to use KB
                 force_kb = rule_action_results.get("use_kb", False) if rule_action_results else False
@@ -179,10 +186,14 @@ class ChatService:
                 trace["kb_source_filter"] = kb_source
                 trace["conversation_context_used"] = len(conversation_history)
                 
-                # DYNAMIC GROUNDING: Enable web search if KB has no relevant results (unless rule says use KB)
-                enable_web_search = len(knowledge_items) == 0 and not force_kb
+                # DYNAMIC GROUNDING: Enable web search if KB has no relevant results (unless rule says use KB or a rule matched)
+                # If a rule matched, disable web search - rules should provide the response
+                rule_matched = matched_rule is not None
+                enable_web_search = len(knowledge_items) == 0 and not force_kb and not rule_matched
                 if enable_web_search:
                     logger.info("🌐 No KB matches found - enabling Google Search Grounding for web search")
+                elif rule_matched:
+                    logger.info("🚫 Rule matched - disabling web search (rule should provide the response)")
                 
                 # Build prompt with persona, knowledge, conversation history, and rule constraints
                 prompt = self._build_prompt_with_confidence(
@@ -197,7 +208,7 @@ class ChatService:
                 # Generate response using Vertex AI (with optional web search)
                 if enable_web_search:
                     # Use web search grounding
-                    search_result = self.vertex_ai.generate_text_with_search(prompt, enable_search=True)
+                    search_result = self.vertex_ai.generate_text_with_search(prompt, enable_search=True, model_name=model_name)
                     raw_response = search_result["response"]
                     
                     # Track grounding info in trace
@@ -208,7 +219,7 @@ class ChatService:
                         logger.info(f"🌐 Web search performed - {len(search_result['sources'])} sources used")
                 else:
                     # Standard KB-based response
-                    raw_response = self.vertex_ai.generate_text(prompt)
+                    raw_response = self.vertex_ai.generate_text(prompt, model_name=model_name)
                     trace["web_search_used"] = False
                 
                 # Parse confidence and response (with follow-up questions and image requirements)
@@ -323,13 +334,13 @@ class ChatService:
             logger.warning(f"⚠️ Failed to get conversation history: {e}")
             return []
     
-    def _detect_conditions(self, message: str) -> Dict[str, Any]:
+    def _detect_conditions(self, message: str, model_name: Optional[str] = None) -> Dict[str, Any]:
         """Detect conditions (keyword, intent, sentiment)"""
         conditions = {}
         
         # Detect intent
         try:
-            intent_data = self.vertex_ai.detect_intent(message)
+            intent_data = self.vertex_ai.detect_intent(message, model_name=model_name)
             conditions["intent"] = intent_data
             logger.info(f"🎯 Detected intent: {intent_data}")
         except Exception as e:
@@ -338,7 +349,7 @@ class ChatService:
         
         # Detect sentiment
         try:
-            sentiment_data = self.vertex_ai.detect_sentiment(message)
+            sentiment_data = self.vertex_ai.detect_sentiment(message, model_name=model_name)
             conditions["sentiment"] = sentiment_data
             logger.info(f"😊 Detected sentiment: {sentiment_data}")
         except Exception as e:

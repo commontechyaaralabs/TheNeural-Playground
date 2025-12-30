@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException, Depends, Query
 from typing import List
+from pydantic import BaseModel
 
 from ..models import (
     RuleSaveRequest, RuleResponse, RuleListResponse,
@@ -8,6 +9,10 @@ from ..models import (
 from ..services.rules_service import RulesService
 
 router = APIRouter(prefix="/rules", tags=["agent"])
+
+
+class RuleStatusUpdate(BaseModel):
+    active: bool
 
 
 def get_rules_service():
@@ -62,6 +67,23 @@ async def delete_rule(
     try:
         success = rules_service.delete_rule(rule_id)
         return {"success": success, "message": f"Rule {rule_id} deleted"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.patch("/{rule_id}/status")
+async def update_rule_status(
+    rule_id: str,
+    status_update: RuleStatusUpdate,
+    rules_service: RulesService = Depends(get_rules_service)
+):
+    """
+    Enable or disable a rule.
+    """
+    try:
+        success = rules_service.update_rule_status(rule_id, status_update.active)
+        status = "enabled" if status_update.active else "disabled"
+        return {"success": success, "message": f"Rule {rule_id} {status}"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

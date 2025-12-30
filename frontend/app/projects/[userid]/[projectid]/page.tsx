@@ -18,6 +18,7 @@ import { cleanupSessionWithReason, SessionCleanupReason } from '../../../../lib/
 import Link from 'next/link'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { TeachYourAgent } from '../../../../components/TeachYourAgent'
 
 interface GuestSession {
   session_id: string;
@@ -126,6 +127,40 @@ interface GroupedLinkKnowledge {
   content: string;
 }
 
+// Agent interface
+interface Agent {
+  agent_id: string;
+  user_id: string;
+  session_id: string;
+  name: string;
+  role: string;
+  tone: string;
+  language: string;
+  description: string;
+  created_at: string;
+  updated_at: string;
+  active: boolean;
+}
+
+// Knowledge chunk interface
+interface KnowledgeChunk {
+  knowledge_id: string;
+  content?: string;
+  [key: string]: unknown;
+}
+
+// Knowledge item interface
+interface KnowledgeItem {
+  knowledge_id: string;
+  agent_id: string;
+  type: 'text' | 'file' | 'link' | 'qna';
+  content: string;
+  metadata?: Record<string, unknown>;
+  priority?: number;
+  created_at: string;
+  [key: string]: unknown;
+}
+
 export default function ProjectDetailsPage() {
   const [guestSession, setGuestSession] = useState<GuestSession | null>(null);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
@@ -136,8 +171,15 @@ export default function ProjectDetailsPage() {
   const [activeTab, setActiveTab] = useState<'train' | 'publish'>('train');
   const [showPreview, setShowPreview] = useState(true);
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [trainSection, setTrainSection] = useState<'persona' | 'knowledge' | 'actions' | 'tools' | 'forms' | 'teach'>('persona');
+  const [trainSection, setTrainSection] = useState<'settings' | 'persona' | 'knowledge' | 'actions' | 'tools' | 'forms' | 'teach'>('settings');
   const contentAreaRef = useRef<HTMLDivElement>(null);
+  
+  // Project Settings state
+  const [selectedModel, setSelectedModel] = useState<string>('gemini-2.5-flash-lite');
+  const [selectedEmbeddingModel, setSelectedEmbeddingModel] = useState<string>('text-embedding-005');
+  const [selectedSimilarity, setSelectedSimilarity] = useState<string>('Cosine similarity');
+  const [isSavingSettings, setIsSavingSettings] = useState(false);
+  const [settingsSaveMessage, setSettingsSaveMessage] = useState<{type: 'success' | 'error', text: string} | null>(null);
   
   // Chat state for USE AI tab
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
@@ -163,7 +205,7 @@ export default function ProjectDetailsPage() {
   const [knowledgeText, setKnowledgeText] = useState('');
   const [isSavingKnowledge, setIsSavingKnowledge] = useState(false);
   const [knowledgeSaveMessage, setKnowledgeSaveMessage] = useState<{type: 'success' | 'error', text: string} | null>(null);
-  const [knowledgeList, setKnowledgeList] = useState<any[]>([]);
+  const [knowledgeList, setKnowledgeList] = useState<KnowledgeItem[]>([]);
   const [isLoadingKnowledge, setIsLoadingKnowledge] = useState(false);
   const [editingKnowledge, setEditingKnowledge] = useState<{id: string, content: string} | null>(null);
   const [isUpdatingKnowledge, setIsUpdatingKnowledge] = useState(false);
@@ -173,7 +215,7 @@ export default function ProjectDetailsPage() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isUploadingFile, setIsUploadingFile] = useState(false);
   const [fileUploadMessage, setFileUploadMessage] = useState<{type: 'success' | 'error', text: string} | null>(null);
-  const [fileKnowledgeList, setFileKnowledgeList] = useState<any[]>([]);
+  const [fileKnowledgeList, setFileKnowledgeList] = useState<KnowledgeItem[]>([]);
   const [isLoadingFileKnowledge, setIsLoadingFileKnowledge] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   
@@ -181,7 +223,7 @@ export default function ProjectDetailsPage() {
   const [linkUrl, setLinkUrl] = useState('');
   const [isAddingLink, setIsAddingLink] = useState(false);
   const [linkMessage, setLinkMessage] = useState<{type: 'success' | 'error', text: string} | null>(null);
-  const [linkKnowledgeList, setLinkKnowledgeList] = useState<any[]>([]);
+  const [linkKnowledgeList, setLinkKnowledgeList] = useState<KnowledgeItem[]>([]);
   const [isLoadingLinkKnowledge, setIsLoadingLinkKnowledge] = useState(false);
   const [deletingLinkId, setDeletingLinkId] = useState<string | null>(null);
   const [viewingLink, setViewingLink] = useState<GroupedLinkKnowledge | null>(null);
@@ -201,6 +243,8 @@ export default function ProjectDetailsPage() {
   const [ruleSaveMessage, setRuleSaveMessage] = useState<{type: 'success' | 'error', text: string} | null>(null);
   const [deletingRuleId, setDeletingRuleId] = useState<string | null>(null);
   const [isCreatingRule, setIsCreatingRule] = useState(false);
+  const [activeRuleMenu, setActiveRuleMenu] = useState<string | null>(null);
+  const [editingRule, setEditingRule] = useState<SavedRule | null>(null);
   const actionsContainerRef = useRef<HTMLDivElement>(null);
 
   const params = useParams();
@@ -396,8 +440,23 @@ export default function ProjectDetailsPage() {
   useEffect(() => {
     if (selectedProject && selectedProject.type === 'custom-ai-agent' && selectedProject.agent_id) {
       loadPersona(selectedProject.agent_id);
+      loadSettings(selectedProject.agent_id);
     }
   }, [selectedProject]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Refresh persona when switching to persona section (ensures data is fresh after Teach Your Agent changes)
+  useEffect(() => {
+    if (trainSection === 'persona' && selectedProject?.agent_id && activeTab === 'train') {
+      loadPersona(selectedProject.agent_id);
+    }
+  }, [trainSection, activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Load settings when switching to settings section
+  useEffect(() => {
+    if (trainSection === 'settings' && selectedProject?.agent_id && activeTab === 'train') {
+      loadSettings(selectedProject.agent_id);
+    }
+  }, [trainSection, activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load persona from API
   const loadPersona = async (agentId: string) => {
@@ -416,7 +475,85 @@ export default function ProjectDetailsPage() {
     }
   };
 
+  // Load settings from API
+  const loadSettings = async (agentId: string) => {
+    try {
+      const response = await fetch(`${config.apiBaseUrl}${config.api.agents.settings.get(agentId)}`);
+      if (response.ok) {
+        const settings = await response.json();
+        setSelectedModel(settings.model || 'gemini-2.5-flash-lite');
+        setSelectedEmbeddingModel(settings.embedding_model || 'text-embedding-005');
+        setSelectedSimilarity(settings.similarity || 'Cosine similarity');
+        console.log('✅ Settings loaded:', settings);
+      }
+    } catch (error) {
+      console.error('Error loading settings:', error);
+    }
+  };
+
   // Save persona to API
+  // Save project settings
+  const saveSettings = async () => {
+    if (!selectedProject?.agent_id) {
+      console.warn('Cannot save settings: No agent_id found for project');
+      setSettingsSaveMessage({ type: 'error', text: 'Cannot save settings: Project not found' });
+      return;
+    }
+
+    setIsSavingSettings(true);
+    setSettingsSaveMessage(null);
+
+    try {
+      // Log project settings to console/terminal
+      const settingsData = {
+        agent_id: selectedProject.agent_id,
+        project_name: selectedProject.name,
+        model: selectedModel,
+        embedding_model: selectedEmbeddingModel,
+        similarity: selectedSimilarity,
+        timestamp: new Date().toISOString()
+      };
+      
+      console.log('=== PROJECT SETTINGS SAVE ===');
+      console.log('Agent ID:', settingsData.agent_id);
+      console.log('Project Name:', settingsData.project_name);
+      console.log('Model:', settingsData.model);
+      console.log('Embedding Model:', settingsData.embedding_model);
+      console.log('Similarity:', settingsData.similarity);
+      console.log('Timestamp:', settingsData.timestamp);
+      console.log('Full Settings Object:', JSON.stringify(settingsData, null, 2));
+      console.log('============================');
+      
+      // Call the actual API endpoint
+      const response = await fetch(`${config.apiBaseUrl}${config.api.agents.settings.update(selectedProject.agent_id)}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: selectedModel,
+          embedding_model: selectedEmbeddingModel,
+          similarity: selectedSimilarity,
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        console.log('✅ Settings saved to backend:', data);
+        setSettingsSaveMessage({ type: 'success', text: 'Settings saved successfully!' });
+        setTimeout(() => setSettingsSaveMessage(null), 3000);
+      } else {
+        const errorData = await response.json().catch(() => ({ detail: 'Failed to save settings' }));
+        throw new Error(errorData.detail || 'Failed to save settings');
+      }
+    } catch (error) {
+      console.error('Error saving settings:', error);
+      setSettingsSaveMessage({ type: 'error', text: 'Failed to save settings. Please try again.' });
+    } finally {
+      setIsSavingSettings(false);
+    }
+  };
+
   const savePersona = async () => {
     if (!selectedProject?.agent_id) return;
 
@@ -670,15 +807,15 @@ export default function ProjectDetailsPage() {
   };
 
   // Group file knowledge entries by file name
-  const groupedFileKnowledge = fileKnowledgeList.reduce((acc, item) => {
-    const fileName = item.metadata?.file_name || 'Unknown File';
+  const groupedFileKnowledge = fileKnowledgeList.reduce((acc: Record<string, GroupedFileKnowledge>, item) => {
+    const fileName = (item.metadata?.file_name as string) || 'Unknown File';
     if (!acc[fileName]) {
       acc[fileName] = {
         fileName,
-        fileType: item.metadata?.file_type,
-        fileUrl: item.metadata?.file_url,
-        fileSize: item.metadata?.file_size,
-        totalChunks: item.metadata?.total_chunks || 1,
+        fileType: item.metadata?.file_type as string,
+        fileUrl: item.metadata?.file_url as string,
+        fileSize: item.metadata?.file_size as number,
+        totalChunks: (item.metadata?.total_chunks as number) || 1,
         chunks: [],
         content: item.content // First chunk's content as preview
       };
@@ -745,15 +882,15 @@ export default function ProjectDetailsPage() {
   };
 
   // Group link knowledge entries by URL
-  const groupedLinkKnowledge = linkKnowledgeList.reduce((acc, item) => {
-    const url = item.metadata?.url || 'Unknown URL';
+  const groupedLinkKnowledge = linkKnowledgeList.reduce((acc: Record<string, GroupedLinkKnowledge>, item) => {
+    const url = (item.metadata?.url as string) || 'Unknown URL';
     if (!acc[url]) {
       acc[url] = {
         url,
-        pageTitle: item.metadata?.page_title || url,
-        totalChunks: item.metadata?.total_chunks || 1,
-        extractedChars: item.metadata?.extracted_chars,
-        scrapeMethod: item.metadata?.scrape_method || 'unknown',
+        pageTitle: (item.metadata?.page_title as string) || url,
+        totalChunks: (item.metadata?.total_chunks as number) || 1,
+        extractedChars: item.metadata?.extracted_chars as number,
+        scrapeMethod: (item.metadata?.scrape_method as string) || 'unknown',
         chunks: [],
         content: item.content
       };
@@ -890,6 +1027,7 @@ export default function ProjectDetailsPage() {
         },
         body: JSON.stringify({
           agent_id: selectedProject.agent_id,
+          rule_id: editingRule?.rule_id || undefined,  // Pass rule_id for updates
           name: '',  // Auto-generate name
           conditions: validConditions.map(c => ({ type: c.type, value: c.value })),
           match_type: matchType,
@@ -900,13 +1038,14 @@ export default function ProjectDetailsPage() {
 
       if (response.ok) {
         const data = await response.json();
-        setRuleSaveMessage({ type: 'success', text: 'Rule saved successfully!' });
+        setRuleSaveMessage({ type: 'success', text: editingRule ? 'Rule updated successfully!' : 'Rule saved successfully!' });
         
         // Reset form
         setWhenConditions([{ id: '1', type: '', value: '', isDropdownOpen: false }]);
         setDoActions([{ id: '1', type: '', value: '', isDropdownOpen: false, kbDropdownOpen: false }]);
         setMatchType('ANY');
         setIsCreatingRule(false);
+        setEditingRule(null);
         
         // Reload rules
         loadRules();
@@ -929,6 +1068,7 @@ export default function ProjectDetailsPage() {
     if (!confirm('Are you sure you want to delete this rule?')) return;
 
     setDeletingRuleId(ruleId);
+    setActiveRuleMenu(null);
     try {
       const response = await fetch(`${config.apiBaseUrl}/rules/${ruleId}`, {
         method: 'DELETE',
@@ -946,6 +1086,109 @@ export default function ProjectDetailsPage() {
       setRuleSaveMessage({ type: 'error', text: 'Failed to delete rule' });
     } finally {
       setDeletingRuleId(null);
+    }
+  };
+
+  // Clone a rule
+  const cloneRule = async (rule: SavedRule) => {
+    setActiveRuleMenu(null);
+    try {
+      const clonedConditions = rule.conditions.map((c, i) => ({
+        id: `${Date.now()}-${i}`,
+        type: c.type,
+        value: c.value || '',
+        isDropdownOpen: false
+      }));
+      const clonedActions = rule.actions.map((a, i) => ({
+        id: `${Date.now()}-${i}`,
+        type: a.type,
+        value: a.value,
+        isDropdownOpen: false,
+        kbDropdownOpen: false
+      }));
+
+      // Save cloned rule via API
+      const response = await fetch(`${config.apiBaseUrl}/rules`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          agent_id: selectedProject?.agent_id,
+          name: `${rule.name} (Copy)`,
+          conditions: clonedConditions.map(c => ({ type: c.type, value: c.value })),
+          actions: clonedActions.map(a => ({ type: a.type, value: a.value })),
+          match_type: rule.match_type
+        }),
+      });
+
+      if (response.ok) {
+        await loadRules();
+        setRuleSaveMessage({ type: 'success', text: 'Rule cloned successfully!' });
+        setTimeout(() => setRuleSaveMessage(null), 3000);
+      }
+    } catch (error) {
+      console.error('Error cloning rule:', error);
+      setRuleSaveMessage({ type: 'error', text: 'Failed to clone rule' });
+    }
+  };
+
+  // Edit a rule - populate form with rule data
+  const editRule = (rule: SavedRule) => {
+    setActiveRuleMenu(null);
+    setEditingRule(rule);
+    setIsCreatingRule(true);
+    
+    // Populate conditions
+    const editConditions = rule.conditions.map((c, i) => ({
+      id: `edit-${i}`,
+      type: c.type,
+      value: c.value || '',
+      isDropdownOpen: false
+    }));
+    setWhenConditions(editConditions.length > 0 ? editConditions : [{ id: '1', type: '', value: '', isDropdownOpen: false }]);
+    
+    // Populate actions
+    const editActions = rule.actions.map((a, i) => ({
+      id: `edit-${i}`,
+      type: a.type,
+      value: a.value,
+      isDropdownOpen: false,
+      kbDropdownOpen: false
+    }));
+    setDoActions(editActions.length > 0 ? editActions : [{ id: '1', type: '', value: '', isDropdownOpen: false, kbDropdownOpen: false }]);
+    
+    // Set match type
+    setMatchType(rule.match_type || 'ANY');
+    
+    // Scroll to rule editor
+    setTimeout(() => {
+      actionsContainerRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+    }, 100);
+  };
+
+  // Toggle rule enabled/disabled status
+  const toggleRuleStatus = async (rule: SavedRule) => {
+    setActiveRuleMenu(null);
+    try {
+      const newStatus = !rule.active;
+      const response = await fetch(`${config.apiBaseUrl}/rules/${rule.rule_id}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ active: newStatus }),
+      });
+
+      if (response.ok) {
+        setSavedRules(prev => prev.map(r => 
+          r.rule_id === rule.rule_id ? { ...r, active: newStatus } : r
+        ));
+        setRuleSaveMessage({ 
+          type: 'success', 
+          text: newStatus ? 'Rule enabled!' : 'Rule disabled!' 
+        });
+        setTimeout(() => setRuleSaveMessage(null), 3000);
+      }
+    } catch (error) {
+      console.error('Error toggling rule status:', error);
+      setRuleSaveMessage({ type: 'error', text: 'Failed to update rule status' });
     }
   };
 
@@ -985,6 +1228,20 @@ export default function ProjectDetailsPage() {
       document.removeEventListener('mousedown', handleClickOutside);
     };
   }, [whenConditions, doActions]);
+
+  // Click outside handler for rule action menu
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+      if (activeRuleMenu && !target.closest('[data-rule-menu]')) {
+        setActiveRuleMenu(null);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [activeRuleMenu]);
 
   // Open original URL in new tab
   const openLinkUrl = (url: string) => {
@@ -1117,7 +1374,7 @@ export default function ProjectDetailsPage() {
     if (!href) return <span>{children}</span>;
     
     // Fix common URL typos from LLM (httpss -> https, etc.)
-    let fixedHref = href
+    const fixedHref = href
       .replace(/^httpss:\/\//i, 'https://')
       .replace(/^httpp:\/\//i, 'http://')
       .replace(/^hhtps:\/\//i, 'https://')
@@ -1352,7 +1609,7 @@ export default function ProjectDetailsPage() {
       if (agentsResponse && agentsResponse.ok) {
         const agentsData = await agentsResponse.json();
         if (agentsData && Array.isArray(agentsData) && agentsData.length > 0) {
-          const agentsAsProjects = agentsData.map((agent: any) => ({
+          const agentsAsProjects = agentsData.map((agent: Agent) => ({
             id: agent.agent_id,
             name: agent.name,
             type: 'custom-ai-agent',
@@ -1486,7 +1743,7 @@ export default function ProjectDetailsPage() {
                     <button
                       onClick={() => {
                         setActiveTab('train');
-                        setTrainSection('persona');
+                        setTrainSection('settings');
                       }}
                       className={`px-6 py-2.5 font-semibold text-sm transition-all duration-200 rounded-md ${
                         activeTab === 'train'
@@ -1777,6 +2034,24 @@ export default function ProjectDetailsPage() {
                       /* TRAIN Tab - Training Sections */
                       <div className="space-y-2">
                         <button
+                          onClick={() => setTrainSection('settings')}
+                          className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
+                            trainSection === 'settings'
+                              ? 'bg-[#bc6cd3]/20 text-white'
+                              : 'text-gray-400 hover:bg-gray-700/30 hover:text-white'
+                          }`}
+                        >
+                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                          </svg>
+                          <div className="flex-1 text-left">
+                            <div className="font-medium text-sm">PROJECT SETTINGS</div>
+                            <div className="text-xs text-gray-500">Manage project configuration</div>
+                          </div>
+                        </button>
+
+                        <button
                           onClick={() => setTrainSection('persona')}
                           className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
                             trainSection === 'persona'
@@ -1854,7 +2129,98 @@ export default function ProjectDetailsPage() {
                     {/* Main Content Area */}
                     <div ref={contentAreaRef} className="flex-1 min-w-0 overflow-y-auto relative bg-[#1c1c1c] dark-scrollbar">
                       <div className="py-8 px-6">
-                        {trainSection === 'persona' ? (
+                        {trainSection === 'settings' ? (
+                          /* PROJECT SETTINGS Section */
+                          <div>
+                            <div className="mb-6">
+                              <h2 className="text-2xl font-bold text-white mb-2">PROJECT SETTINGS</h2>
+                              <p className="text-sm text-gray-400">Manage your project configuration and preferences</p>
+                            </div>
+
+                            <div className="space-y-6">
+                              {/* Model Selection */}
+                              <div className="bg-[#1c1c1c] border border-[#bc6cd3]/20 rounded-xl p-6">
+                                <h3 className="text-lg font-semibold text-white mb-4">Model Configuration</h3>
+                                <div className="space-y-4">
+                                  <div>
+                                    <label className="block text-sm font-medium text-gray-300 mb-2">Model</label>
+                                    <select
+                                      value={selectedModel}
+                                      onChange={(e) => setSelectedModel(e.target.value)}
+                                      className="w-full px-4 py-3 bg-[#2a2a2a] border border-[#bc6cd3]/20 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-[#bc6cd3] focus:border-transparent"
+                                    >
+                                      <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite</option>
+                                      <option value="gemini-2.5-pro">gemini-2.5-pro</option>
+                                    </select>
+                                  </div>
+
+                                  <div>
+                                    <label className="block text-sm font-medium text-gray-300 mb-2">Embedding Model</label>
+                                    <select
+                                      value={selectedEmbeddingModel}
+                                      onChange={(e) => setSelectedEmbeddingModel(e.target.value)}
+                                      className="w-full px-4 py-3 bg-[#2a2a2a] border border-[#bc6cd3]/20 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-[#bc6cd3] focus:border-transparent"
+                                    >
+                                      <option value="text-embedding-005">text-embedding-005</option>
+                                      <option value="gemini-embedding-001">gemini-embedding-001</option>
+                                      <option value="text-multilingual-embedding-002">text-multilingual-embedding-002</option>
+                                    </select>
+                                  </div>
+
+                                  <div>
+                                    <label className="block text-sm font-medium text-gray-300 mb-2">Similarity</label>
+                                    <select
+                                      value={selectedSimilarity}
+                                      onChange={(e) => setSelectedSimilarity(e.target.value)}
+                                      className="w-full px-4 py-3 bg-[#2a2a2a] border border-[#bc6cd3]/20 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-[#bc6cd3] focus:border-transparent"
+                                    >
+                                      <option value="Cosine similarity">Cosine similarity</option>
+                                      <option value="Euclidean Distance">Euclidean Distance</option>
+                                      <option value="Jaccard Similarity">Jaccard Similarity</option>
+                                    </select>
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* Save Button */}
+                              <div className="mt-6 flex justify-end">
+                                <button
+                                  onClick={saveSettings}
+                                  disabled={isSavingSettings}
+                                  className="px-6 py-2.5 bg-[#bc6cd3] text-white rounded-lg font-medium hover:bg-[#a855c7] transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                                >
+                                  {isSavingSettings ? (
+                                    <>
+                                      <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                      </svg>
+                                      <span>Saving...</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                      </svg>
+                                      <span>Save Settings</span>
+                                    </>
+                                  )}
+                                </button>
+                              </div>
+                              
+                              {/* Success/Error Message */}
+                              {settingsSaveMessage && (
+                                <div className={`mt-4 px-4 py-3 rounded-lg ${
+                                  settingsSaveMessage.type === 'success' 
+                                    ? 'bg-green-500/20 border border-green-500/50 text-green-400' 
+                                    : 'bg-red-500/20 border border-red-500/50 text-red-400'
+                                }`}>
+                                  {settingsSaveMessage.text}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        ) : trainSection === 'persona' ? (
                           /* AI PERSONA Section */
                           <div>
                           <div className="flex items-center justify-between mb-4">
@@ -1984,21 +2350,70 @@ export default function ProjectDetailsPage() {
                             <div>
                               <label className="block text-sm font-semibold text-white mb-2">Chat Guidelines</label>
                               <p className="text-sm text-gray-400 mb-3">Set clear rules for how your agent should respond in chat channels</p>
-                              <textarea
-                                rows={6}
-                                value={personaGuidelines}
-                                onChange={(e) => setPersonaGuidelines(e.target.value)}
-                                className="w-full px-4 py-3 bg-[#2a2a2a] border border-[#bc6cd3]/20 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-[#bc6cd3] focus:border-transparent"
-                                placeholder="Your main goal is to help users schedule health appointments efficiently.
-
-You must be polite, clear, and concise in your communication.
-
-Always ensure users feel comfortable and valued during the interaction.
-
-Gently guide the conversation to gather all needed details without overwhelming users.
-
-Maintain professionalism while being friendly and approachable."
-                              />
+                              <div className="space-y-2">
+                                {personaGuidelines.split('\n').filter(g => g.trim()).map((guideline, index) => (
+                                  <div key={index} className="flex items-center gap-2 group">
+                                    <input
+                                      type="text"
+                                      value={guideline}
+                                      onChange={(e) => {
+                                        const guidelines = personaGuidelines.split('\n').filter(g => g.trim());
+                                        guidelines[index] = e.target.value;
+                                        setPersonaGuidelines(guidelines.join('\n'));
+                                      }}
+                                      className="flex-1 px-4 py-3 bg-[#2a2a2a] border border-[#bc6cd3]/20 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-[#bc6cd3] focus:border-transparent"
+                                    />
+                                    <button
+                                      onClick={() => {
+                                        const guidelines = personaGuidelines.split('\n').filter(g => g.trim());
+                                        guidelines.splice(index, 1);
+                                        setPersonaGuidelines(guidelines.join('\n'));
+                                      }}
+                                      className="p-2 text-gray-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
+                                      title="Delete guideline"
+                                    >
+                                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                      </svg>
+                                    </button>
+                            </div>
+                                ))}
+                                {/* Add new guideline input */}
+                                <div className="flex items-center gap-2">
+                                  <input
+                                    type="text"
+                                    placeholder="Add a new guideline..."
+                                    className="flex-1 px-4 py-3 bg-[#1a1a1a] border border-dashed border-[#bc6cd3]/30 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-[#bc6cd3] focus:border-transparent placeholder-gray-500"
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter' && e.currentTarget.value.trim()) {
+                                        const newGuideline = e.currentTarget.value.trim();
+                                        setPersonaGuidelines(prev => 
+                                          prev.trim() ? `${prev}\n${newGuideline}` : newGuideline
+                                        );
+                                        e.currentTarget.value = '';
+                                      }
+                                    }}
+                                  />
+                                </div>
+                                {/* Add new button */}
+                                <button
+                                  onClick={() => {
+                                    const input = document.querySelector('input[placeholder="Add a new guideline..."]') as HTMLInputElement;
+                                    if (input && input.value.trim()) {
+                                      setPersonaGuidelines(prev => 
+                                        prev.trim() ? `${prev}\n${input.value.trim()}` : input.value.trim()
+                                      );
+                                      input.value = '';
+                                    }
+                                  }}
+                                  className="w-full py-3 bg-blue-500 hover:bg-blue-600 text-white font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
+                                >
+                                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                                  </svg>
+                                  Add new
+                                </button>
+                              </div>
                             </div>
                           </div>
                         </div>
@@ -2480,7 +2895,7 @@ Maintain professionalism while being friendly and approachable."
                                             </button>
                                             {/* Delete Button */}
                                             <button
-                                              onClick={() => deleteFileKnowledge(file.fileName, file.chunks.map((c: any) => c.knowledge_id))}
+                                              onClick={() => deleteFileKnowledge(file.fileName, file.chunks.map((c: KnowledgeChunk) => c.knowledge_id))}
                                               disabled={deletingKnowledgeId === file.fileName}
                                               className="p-1.5 text-gray-400 hover:text-red-400 hover:bg-red-500/10 rounded transition-colors"
                                               title="Delete file"
@@ -2651,7 +3066,7 @@ Maintain professionalism while being friendly and approachable."
                                             </button>
                                             {/* Delete Button */}
                                             <button
-                                              onClick={() => deleteLinkKnowledge(link.url, link.chunks.map((c: any) => c.knowledge_id))}
+                                              onClick={() => deleteLinkKnowledge(link.url, link.chunks.map((c: KnowledgeChunk) => c.knowledge_id))}
                                               disabled={deletingLinkId === link.url}
                                               className="p-1.5 text-gray-400 hover:text-red-400 hover:bg-red-500/10 rounded transition-colors"
                                               title="Delete link"
@@ -2723,10 +3138,11 @@ Maintain professionalism while being friendly and approachable."
                           {isCreatingRule && (
                             <div className="bg-[#2a2a2a] rounded-xl p-6 border border-[#bc6cd3]/20 mb-6">
                               <div className="flex items-center justify-between mb-6">
-                                <h3 className="text-lg font-semibold text-white">New Rule</h3>
+                                <h3 className="text-lg font-semibold text-white">{editingRule ? 'Edit Rule' : 'New Rule'}</h3>
                                 <button
                                   onClick={() => {
                                     setIsCreatingRule(false);
+                                    setEditingRule(null);
                                     setWhenConditions([{ id: '1', type: '', value: '', isDropdownOpen: false }]);
                                     setDoActions([{ id: '1', type: '', value: '', isDropdownOpen: false, kbDropdownOpen: false }]);
                                     setMatchType('ANY');
@@ -2981,12 +3397,12 @@ Maintain professionalism while being friendly and approachable."
                                               <span className={action.value ? 'text-white' : 'text-gray-500'}>
                                                 {action.value || 'Select knowledge base...'}
                                               </span>
-                                              <svg className={`w-4 h-4 text-gray-400 transition-transform ${(action as any).kbDropdownOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                              <svg className={`w-4 h-4 text-gray-400 transition-transform ${action.kbDropdownOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                                               </svg>
                                             </button>
                                             
-                                            {(action as any).kbDropdownOpen && (
+                                            {action.kbDropdownOpen && (
                                               <div className="absolute z-50 w-full mt-1 bg-[#1c1c1c] border border-[#bc6cd3]/30 rounded-lg shadow-xl max-h-64 overflow-y-auto">
                                                 {/* All KB Option */}
                                                 <button
@@ -3180,10 +3596,22 @@ Maintain professionalism while being friendly and approachable."
                           {!isLoadingRules && savedRules.length > 0 && (
                             <div className="space-y-3">
                               {savedRules.map((rule) => (
-                                <div key={rule.rule_id} className="bg-[#2a2a2a] rounded-lg p-4 border border-[#bc6cd3]/10 hover:border-[#bc6cd3]/30 transition-colors">
+                                <div 
+                                  key={rule.rule_id} 
+                                  className={`bg-[#2a2a2a] rounded-lg p-4 border transition-colors ${
+                                    rule.active === false 
+                                      ? 'border-gray-600 opacity-60' 
+                                      : 'border-[#bc6cd3]/10 hover:border-[#bc6cd3]/30'
+                                  }`}
+                                >
                                   <div className="flex items-start justify-between">
                                     <div className="flex-1">
-                                      <h4 className="text-white font-medium mb-2">{rule.name}</h4>
+                                      <div className="flex items-center gap-2 mb-2">
+                                        <h4 className="text-white font-medium">{rule.name}</h4>
+                                        {rule.active === false && (
+                                          <span className="px-2 py-0.5 bg-gray-600 text-gray-300 text-xs rounded-full">Disabled</span>
+                                        )}
+                                      </div>
                                       <div className="space-y-2">
                                         {/* Conditions */}
                                         <div className="flex flex-wrap gap-2">
@@ -3210,22 +3638,76 @@ Maintain professionalism while being friendly and approachable."
                                         </div>
                                       </div>
                                     </div>
+                                    
+                                    {/* Actions Menu */}
+                                    <div className="relative ml-4" data-rule-menu>
                                     <button
-                                      onClick={() => deleteRule(rule.rule_id)}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setActiveRuleMenu(activeRuleMenu === rule.rule_id ? null : rule.rule_id);
+                                        }}
+                                        className="p-2 text-gray-400 hover:text-white transition-colors rounded-lg hover:bg-[#3a3a3a]"
+                                      >
+                                        <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                                          <path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/>
+                                        </svg>
+                                      </button>
+                                      
+                                      {/* Dropdown Menu */}
+                                      {activeRuleMenu === rule.rule_id && (
+                                        <div className="absolute right-0 top-full mt-1 w-40 bg-[#1e2a3a] rounded-lg shadow-xl border border-[#2a4a6a] z-50 overflow-hidden" data-rule-menu>
+                                          <button
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              editRule(rule);
+                                            }}
+                                            className="w-full flex items-center gap-3 px-4 py-2.5 text-white hover:bg-[#2a4a6a] transition-colors text-left"
+                                          >
+                                            <svg className="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                                            </svg>
+                                            Edit
+                                          </button>
+                                          <button
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              toggleRuleStatus(rule);
+                                            }}
+                                            className="w-full flex items-center gap-3 px-4 py-2.5 text-white hover:bg-[#2a4a6a] transition-colors text-left"
+                                          >
+                                            <svg className="w-4 h-4 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                              {rule.active === false ? (
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                                              ) : (
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" />
+                                              )}
+                                            </svg>
+                                            {rule.active === false ? 'Enable' : 'Disable'}
+                                          </button>
+                                          <div className="border-t border-[#2a4a6a]"></div>
+                                          <button
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              deleteRule(rule.rule_id);
+                                            }}
                                       disabled={deletingRuleId === rule.rule_id}
-                                      className="ml-4 p-2 text-gray-400 hover:text-red-400 transition-colors disabled:opacity-50"
+                                            className="w-full flex items-center gap-3 px-4 py-2.5 text-red-400 hover:bg-red-500/10 transition-colors text-left disabled:opacity-50"
                                     >
                                       {deletingRuleId === rule.rule_id ? (
-                                        <svg className="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
+                                              <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
                                           <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                                           <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                                         </svg>
                                       ) : (
-                                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                                         </svg>
                                       )}
+                                            Delete
                                     </button>
+                                        </div>
+                                      )}
+                                    </div>
                                   </div>
                                 </div>
                               ))}
@@ -3264,62 +3746,38 @@ Maintain professionalism while being friendly and approachable."
                         </div>
                       ) : trainSection === 'teach' ? (
                         /* TEACH YOUR AGENT Section */
-                        <div className="h-full flex flex-col">
-                          {/* Header */}
-                          <div className="flex items-center justify-between mb-6">
-                            <div className="flex items-center gap-4">
-                              <div className="w-12 h-12 bg-[#5c3d7a] rounded-xl flex items-center justify-center">
-                                <svg className="w-6 h-6 text-white" fill="currentColor" viewBox="0 0 24 24">
-                                  <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z"/>
-                                  <circle cx="8" cy="10" r="1.5"/>
-                                  <circle cx="12" cy="10" r="1.5"/>
-                                  <circle cx="16" cy="10" r="1.5"/>
-                                </svg>
-                              </div>
-                              <div>
-                                <h2 className="text-xl font-bold text-white">Teach Your Agent</h2>
-                                <p className="text-sm text-gray-400">Prepare your Agent by simply talking</p>
-                              </div>
-                            </div>
-                            <div className="flex items-center gap-3">
-                              <button className="flex items-center gap-2 px-4 py-2 bg-[#2a2a2a] border border-[#bc6cd3]/20 text-white rounded-lg hover:bg-[#3a3a3a] transition-colors">
-                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                                </svg>
-                                <span className="text-sm">Restart</span>
-                              </button>
-                              <button className="flex items-center gap-2 px-4 py-2 bg-[#2a2a2a] border border-[#bc6cd3]/20 text-white rounded-lg hover:bg-[#3a3a3a] transition-colors">
-                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                                </svg>
-                                <span className="text-sm">Chat History</span>
-                              </button>
-                            </div>
-                          </div>
-
-                          {/* Chat Container */}
-                          <div className="flex-1 bg-[#2a2a2a] border border-[#bc6cd3]/20 rounded-xl overflow-hidden flex flex-col min-h-[400px]">
-                            {/* Chat Messages Area */}
-                            <div className="flex-1 p-6 overflow-y-auto dark-scrollbar bg-[#1c1c1c]">
-                              {/* Empty state - messages will appear here */}
-          </div>
-
-                            {/* Chat Input */}
-                            <div className="p-4 border-t border-[#bc6cd3]/20">
-                              <div className="flex items-center gap-3 bg-[#2a2a2a] border border-[#bc6cd3]/20 rounded-xl px-4 py-3">
-                                <input
-                                  type="text"
-                                  placeholder="Type here"
-                                  className="flex-1 bg-transparent text-white placeholder-gray-400 focus:outline-none text-base"
-                                />
-                                <button className="w-10 h-10 bg-[#bc6cd3] rounded-full flex items-center justify-center hover:bg-[#a855c7] transition-colors flex-shrink-0">
-                                  <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+                        <div className="h-full min-h-[600px]">
+                          {selectedProject?.agent_id ? (
+                            <TeachYourAgent
+                              agentId={selectedProject.agent_id}
+                              sessionId={actualSessionId}
+                              agentName={personaName || selectedProject.name}
+                              onPersonaUpdated={() => {
+                                // Refresh persona data
+                                if (selectedProject?.agent_id) {
+                                  loadPersona(selectedProject.agent_id);
+                                }
+                              }}
+                              onKnowledgeAdded={() => {
+                                // Refresh knowledge list
+                                loadKnowledgeList();
+                              }}
+                              onActionCreated={() => {
+                                // Refresh rules list
+                                loadRules();
+                              }}
+                            />
+                          ) : (
+                            <div className="flex items-center justify-center h-full">
+                              <div className="text-center">
+                                <svg className="w-16 h-16 text-white/20 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
                                   </svg>
-                                </button>
+                                <p className="text-white/40">Agent not initialized</p>
+                                <p className="text-white/30 text-sm mt-1">Please wait while your agent is being set up...</p>
                               </div>
                             </div>
-                          </div>
+                          )}
                         </div>
                       ) : (
                           <div className="text-center py-12">
@@ -3481,7 +3939,7 @@ Maintain professionalism while being friendly and approachable."
               <div className="bg-[#2a2a2a] rounded-lg p-4 border border-[#3a3a3a]">
                 <p className="text-sm text-gray-300 whitespace-pre-wrap leading-relaxed">
                   {viewingLink.chunks && viewingLink.chunks.length > 0 
-                    ? viewingLink.chunks.map((chunk: any) => chunk.content).join('\n\n')
+                    ? viewingLink.chunks.map((chunk: KnowledgeChunk) => chunk.content).join('\n\n')
                     : viewingLink.content
                   }
                 </p>

@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
 from google.cloud import firestore
 
-from ..models import Agent, Persona, AgentCreateRequest, PersonaUpdateRequest
+from ..models import Agent, Persona, AgentCreateRequest, PersonaUpdateRequest, AgentSettings, SettingsUpdateRequest
 from ..config import gcp_clients
 from .vertex_ai_service import VertexAIService
 
@@ -21,6 +21,7 @@ class AgentService:
         # Initialize collections
         self.agents_collection = self.firestore_client.collection('agents')
         self.personas_collection = self.firestore_client.collection('personas')
+        self.settings_collection = self.firestore_client.collection('agent_settings')
         
         # Initialize Vertex AI service
         self.vertex_ai = VertexAIService(self.project_id)
@@ -271,4 +272,78 @@ class AgentService:
         except Exception as e:
             logger.error(f"❌ Failed to cleanup old agents: {e}")
             raise Exception(f"Failed to cleanup old agents: {str(e)}")
+    
+    def get_settings(self, agent_id: str) -> Optional[AgentSettings]:
+        """Get settings for an agent"""
+        try:
+            settings_ref = self.settings_collection.document(agent_id)
+            settings_doc = settings_ref.get()
+            
+            if not settings_doc.exists:
+                # Return default settings if not found
+                return AgentSettings(
+                    agent_id=agent_id,
+                    model="gemini-2.5-flash-lite",
+                    embedding_model="text-embedding-005",
+                    similarity="Cosine similarity"
+                )
+            
+            settings_data = settings_doc.to_dict()
+            return AgentSettings(**settings_data)
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to get settings: {e}")
+            raise Exception(f"Failed to get settings: {str(e)}")
+    
+    def update_settings(self, agent_id: str, request: SettingsUpdateRequest) -> AgentSettings:
+        """Update settings for an agent"""
+        try:
+            # Verify agent exists
+            agent = self.get_agent(agent_id)
+            if not agent:
+                raise Exception("Agent not found")
+            
+            settings_ref = self.settings_collection.document(agent_id)
+            settings_doc = settings_ref.get()
+            
+            # Get current settings or use defaults
+            if settings_doc.exists:
+                current_data = settings_doc.to_dict()
+                current_settings = AgentSettings(**current_data)
+            else:
+                current_settings = AgentSettings(
+                    agent_id=agent_id,
+                    model="gemini-2.5-flash-lite",
+                    embedding_model="text-embedding-005",
+                    similarity="Cosine similarity"
+                )
+            
+            # Update only provided fields
+            update_data = {
+                "agent_id": agent_id,
+                "model": request.model if request.model is not None else current_settings.model,
+                "embedding_model": request.embedding_model if request.embedding_model is not None else current_settings.embedding_model,
+                "similarity": request.similarity if request.similarity is not None else current_settings.similarity,
+                "updated_at": datetime.now(timezone.utc)
+            }
+            
+            # Set created_at only if creating new
+            if not settings_doc.exists:
+                update_data["created_at"] = datetime.now(timezone.utc)
+            else:
+                update_data["created_at"] = current_settings.created_at
+            
+            # Save to Firestore
+            settings_ref.set(update_data)
+            
+            logger.info(f"✅ Settings updated for agent: {agent_id}")
+            logger.info(f"   Model: {update_data['model']}")
+            logger.info(f"   Embedding Model: {update_data['embedding_model']}")
+            logger.info(f"   Similarity: {update_data['similarity']}")
+            
+            return AgentSettings(**update_data)
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to update settings: {e}")
+            raise Exception(f"Failed to update settings: {str(e)}")
 

@@ -49,6 +49,20 @@ interface GuestSession {
   last_active?: string;
 }
 
+interface Agent {
+  agent_id: string;
+  user_id: string;
+  session_id: string;
+  name: string;
+  role: string;
+  tone: string;
+  language: string;
+  description: string;
+  created_at: string;
+  updated_at: string;
+  active: boolean;
+}
+
 interface GuestSessionResponse {
   success: boolean;
   data: GuestSession;
@@ -243,7 +257,7 @@ function CreateProjectPage() {
       if (agentsResponse && agentsResponse.ok) {
         const agentsData = await agentsResponse.json();
         if (agentsData && Array.isArray(agentsData) && agentsData.length > 0) {
-          const agentsAsProjects = agentsData.map((agent: any) => {
+          const agentsAsProjects = agentsData.map((agent: Agent) => {
             const maskedProjectId = generateMaskedProjectId(agent.agent_id);
             const existingId = getProjectIdFromMaskedId(maskedProjectId);
             if (!existingId) {

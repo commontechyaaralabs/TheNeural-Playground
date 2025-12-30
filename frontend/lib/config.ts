@@ -45,6 +45,10 @@ export const config = {
         get: (agentId: string) => `/agent/${agentId}/persona`,
         update: (agentId: string) => `/agent/${agentId}/persona`,
       },
+      settings: {
+        get: (agentId: string) => `/agent/${agentId}/settings`,
+        update: (agentId: string) => `/agent/${agentId}/settings`,
+      },
       knowledge: {
         text: '/kb/text',
         file: '/kb/file',
@@ -59,6 +63,26 @@ export const config = {
       rules: {
         save: '/rules/save',
         list: (agentId: string) => `/rules?agentId=${agentId}`,
+      },
+      training: {
+        message: '/training/message',
+        apply: '/training/apply',
+        reject: (changeId: string) => `/training/reject/${changeId}`,
+        sessions: (agentId: string) => `/training/sessions?agent_id=${agentId}`,
+        history: (agentId: string, sessionId: string) => `/training/history?agent_id=${agentId}&session_id=${sessionId}`,
+        restart: (agentId: string, sessionId: string) => `/training/restart?agent_id=${agentId}&session_id=${sessionId}`,
+        greeting: (agentId: string) => `/training/greeting?agent_id=${agentId}`,
+        initialize: (agentId: string, sessionId: string) => `/training/initialize?agent_id=${agentId}&session_id=${sessionId}`,
+        pending: (agentId: string, sessionId: string) => `/training/pending/${agentId}?session_id=${sessionId}`,
+        editMessage: (messageId: string) => `/training/message/${messageId}`,
+        deleteMessage: (messageId: string) => `/training/message/${messageId}`,
+        clearHistory: (agentId: string, sessionId: string) => `/training/history/clear?agent_id=${agentId}&session_id=${sessionId}`,
+        // Chat management endpoints (Playground AI-like)
+        createChat: '/training/chats',
+        getChats: (agentId: string) => `/training/chats?agent_id=${agentId}`,
+        getChat: (chatId: string) => `/training/chats/${chatId}`,
+        archiveChat: (chatId: string) => `/training/chats/${chatId}/archive`,
+        deleteChat: (chatId: string) => `/training/chats/${chatId}`,
       },
     },
   },

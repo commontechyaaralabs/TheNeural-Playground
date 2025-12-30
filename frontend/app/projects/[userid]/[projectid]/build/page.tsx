@@ -29,6 +29,20 @@ interface Project {
   agent_id?: string;
 }
 
+interface Agent {
+  agent_id: string;
+  user_id: string;
+  session_id: string;
+  name: string;
+  role: string;
+  tone: string;
+  language: string;
+  description: string;
+  created_at: string;
+  updated_at: string;
+  active: boolean;
+}
+
 export default function BuildPage() {
   const [guestSession, setGuestSession] = useState<GuestSession | null>(null);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
@@ -149,7 +163,7 @@ export default function BuildPage() {
       if (agentsResponse && agentsResponse.ok) {
         const agentsData = await agentsResponse.json();
         if (agentsData && Array.isArray(agentsData) && agentsData.length > 0) {
-          const agentsAsProjects = agentsData.map((agent: any) => ({
+          const agentsAsProjects = agentsData.map((agent: Agent) => ({
             id: agent.agent_id,
             name: agent.name,
             type: 'custom-ai-agent',

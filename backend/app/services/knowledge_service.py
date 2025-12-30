@@ -10,6 +10,7 @@ import re
 from ..models import Knowledge, KnowledgeType, KnowledgeTextRequest, KnowledgeFileRequest, KnowledgeLinkRequest, KnowledgeQnARequest
 from ..config import gcp_clients, settings
 from .vertex_ai_service import VertexAIService
+from .agent_service import AgentService
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,9 @@ class KnowledgeService:
         # Initialize Vertex AI service
         self.vertex_ai = VertexAIService(self.project_id)
         
+        # Initialize Agent Service for loading settings
+        self.agent_service = AgentService()
+        
         logger.info("✅ KnowledgeService initialized")
     
     def _normalize_text(self, text: str) -> str:
@@ -90,6 +94,15 @@ class KnowledgeService:
         
         return chunks
     
+    def _get_embedding_model_name(self, agent_id: str) -> str:
+        """Get embedding model name from agent settings"""
+        try:
+            settings = self.agent_service.get_settings(agent_id)
+            return settings.embedding_model if settings else "text-embedding-005"
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to load embedding model from settings: {e}")
+            return "text-embedding-005"
+    
     def add_text_knowledge(self, request: KnowledgeTextRequest) -> dict:
         """Add text knowledge to agent with chunking support"""
         try:
@@ -110,11 +123,15 @@ class KnowledgeService:
             else:
                 chunks = [content]
             
+            # Get embedding model from settings
+            embedding_model_name = self._get_embedding_model_name(request.agent_id)
+            logger.info(f"🔤 Adding text knowledge - Using embedding model: {embedding_model_name}")
+            
             # Generate embeddings for each chunk
             knowledge_ids = []
             for i, chunk in enumerate(chunks):
                 # Generate embedding for this chunk
-                embedding = self.vertex_ai.generate_embedding(chunk)
+                embedding = self.vertex_ai.generate_embedding(chunk, embedding_model_name=embedding_model_name)
                 
                 # Create knowledge document
                 knowledge_id = f"KB_{uuid.uuid4().hex[:12].upper()}"
@@ -186,8 +203,12 @@ class KnowledgeService:
             chunks = self._chunk_text(normalized_text)
             logger.info(f"📄 Split into {len(chunks)} chunks")
             
+            # Get embedding model from settings
+            embedding_model_name = self._get_embedding_model_name(agent_id)
+            logger.info(f"🔤 Adding file knowledge - Using embedding model: {embedding_model_name}")
+            
             # Generate embeddings for each chunk
-            embeddings = self.vertex_ai.generate_embeddings_batch(chunks)
+            embeddings = self.vertex_ai.generate_embeddings_batch(chunks, embedding_model_name=embedding_model_name)
             
             # Store each chunk as a separate knowledge entry
             knowledge_ids = []
@@ -494,8 +515,12 @@ class KnowledgeService:
             chunks = self._chunk_text(text)
             logger.info(f"📄 Split into {len(chunks)} chunks")
             
+            # Get embedding model from settings
+            embedding_model_name = self._get_embedding_model_name(request.agent_id)
+            logger.info(f"🔤 Adding link knowledge - Using embedding model: {embedding_model_name}")
+            
             # Generate embeddings for each chunk
-            embeddings = self.vertex_ai.generate_embeddings_batch(chunks)
+            embeddings = self.vertex_ai.generate_embeddings_batch(chunks, embedding_model_name=embedding_model_name)
             
             # Store each chunk as a separate knowledge entry
             knowledge_ids = []
@@ -550,8 +575,12 @@ class KnowledgeService:
             # Combine Q + A
             qna_content = f"Q: {request.question}\nA: {request.answer}"
             
+            # Get embedding model from settings
+            embedding_model_name = self._get_embedding_model_name(request.agent_id)
+            logger.info(f"🔤 Adding Q&A knowledge - Using embedding model: {embedding_model_name}")
+            
             # Generate embedding
-            embedding = self.vertex_ai.generate_embedding(qna_content)
+            embedding = self.vertex_ai.generate_embedding(qna_content, embedding_model_name=embedding_model_name)
             
             # Create knowledge document with high priority
             knowledge_id = f"KB_{uuid.uuid4().hex[:12].upper()}"
@@ -641,8 +670,16 @@ class KnowledgeService:
             if not doc.exists:
                 raise ValueError(f"Knowledge entry not found: {knowledge_id}")
             
+            # Get agent_id from the document to load settings
+            data = doc.to_dict()
+            agent_id = data.get('agent_id')
+            
+            # Get embedding model from settings
+            embedding_model_name = self._get_embedding_model_name(agent_id) if agent_id else None
+            logger.info(f"🔤 Updating knowledge - Using embedding model: {embedding_model_name}")
+            
             # Generate new embedding for updated content
-            embedding = self.vertex_ai.generate_embedding(content)
+            embedding = self.vertex_ai.generate_embedding(content, embedding_model_name=embedding_model_name)
             
             # Update document
             knowledge_ref.update({
@@ -690,6 +727,11 @@ class KnowledgeService:
                                   - 0.7 = Only highly relevant content
         """
         try:
+            # Load agent settings to get similarity method
+            settings = self.agent_service.get_settings(agent_id)
+            similarity_method = settings.similarity if settings else "Cosine similarity"
+            logger.info(f"📐 Using similarity method: {similarity_method}")
+            
             # Get all knowledge for this agent
             knowledge_refs = self.knowledge_collection.where('agent_id', '==', agent_id).stream()
             
@@ -700,7 +742,8 @@ class KnowledgeService:
                 knowledge_data = knowledge_doc.to_dict()
                 if 'embedding' in knowledge_data and knowledge_data['embedding']:
                     embedding = knowledge_data['embedding']
-                    similarity = self.vertex_ai.cosine_similarity(query_embedding, embedding)
+                    # Use the similarity method from settings
+                    similarity = self.vertex_ai.calculate_similarity(query_embedding, embedding, method=similarity_method)
                     
                     # Boost Q&A knowledge
                     priority_boost = knowledge_data.get('priority', 1) / 10.0
@@ -713,13 +756,13 @@ class KnowledgeService:
                     # Only include if above threshold
                     if final_score >= similarity_threshold:
                         similarities.append((final_score, knowledge_data))
-                        logger.info(f"✅ KB MATCH: {knowledge_data.get('knowledge_id')} score={final_score:.3f}")
+                        logger.info(f"✅ KB MATCH: {knowledge_data.get('knowledge_id')} score={final_score:.3f} (method: {similarity_method})")
                     else:
-                        logger.info(f"⚠️ KB below threshold: {knowledge_data.get('knowledge_id')} score={final_score:.3f} (threshold={similarity_threshold})")
+                        logger.info(f"⚠️ KB below threshold: {knowledge_data.get('knowledge_id')} score={final_score:.3f} (threshold={similarity_threshold}, method: {similarity_method})")
             
-            # Log all scores for debugging
+            # Log all scores for debugging with similarity method name
             if all_scores:
-                logger.info(f"📊 All KB similarity scores: {[(s[0], s[1]) for s in all_scores]}")
+                logger.info(f"📊 All KB similarity scores ({similarity_method}): {[(f'{s[0]:.3f}', s[1]) for s in all_scores]}")
             
             # Sort by similarity (descending)
             similarities.sort(key=lambda x: x[0], reverse=True)

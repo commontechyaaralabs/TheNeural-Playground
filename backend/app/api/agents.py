@@ -3,7 +3,8 @@ from typing import List, Optional
 
 from ..models import (
     AgentCreateRequest, AgentCreateResponse, Agent,
-    ErrorResponse, PersonaUpdateRequest, PersonaUpdateResponse, Persona
+    ErrorResponse, PersonaUpdateRequest, PersonaUpdateResponse, Persona,
+    SettingsUpdateRequest, SettingsUpdateResponse, AgentSettings
 )
 from ..services.agent_service import AgentService
 
@@ -128,6 +129,58 @@ async def update_persona(
             success=True,
             persona=updated_persona,
             message="Persona updated successfully"
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{agent_id}/settings", response_model=AgentSettings)
+async def get_settings(
+    agent_id: str,
+    agent_service: AgentService = Depends(get_agent_service)
+):
+    """
+    Get settings for an agent.
+    Returns default settings if not found.
+    """
+    try:
+        settings = agent_service.get_settings(agent_id)
+        return settings
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/{agent_id}/settings", response_model=SettingsUpdateResponse)
+async def update_settings(
+    agent_id: str,
+    request: SettingsUpdateRequest,
+    agent_service: AgentService = Depends(get_agent_service)
+):
+    """
+    Update settings for an agent.
+    
+    This endpoint:
+    1. Updates model configuration (model, embedding_model, similarity)
+    2. Creates settings if they don't exist
+    3. The updated settings will affect future chat responses and knowledge base operations
+    """
+    try:
+        # Verify agent exists
+        agent = agent_service.get_agent(agent_id)
+        if not agent:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        
+        # Update settings
+        updated_settings = agent_service.update_settings(agent_id, request)
+        
+        return SettingsUpdateResponse(
+            success=True,
+            settings=updated_settings,
+            message="Settings updated successfully"
         )
     except HTTPException:
         raise
