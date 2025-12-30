@@ -2857,12 +2857,16 @@ async def start_scratch_services(
         if not project or project.student_id != session_id:
             raise HTTPException(status_code=404, detail="Project not found")
         
-        # For now, return success - in production this would start actual services
+        # Use production URL in production, localhost in development
+        from ...config import settings
+        gui_url = "http://localhost:8601" if settings.node_env == "development" else settings.scratch_editor_url
+        vm_url = "http://localhost:8602" if settings.node_env == "development" else settings.scratch_editor_url
+        
         return {
             "success": True,
             "message": "Scratch services started successfully",
-            "gui_url": "http://localhost:8601",
-            "vm_url": "http://localhost:8602",
+            "gui_url": gui_url,
+            "vm_url": vm_url,
             "project_id": project_id,
             "session_id": session_id
         }
@@ -2877,25 +2881,28 @@ async def start_scratch_services(
 async def start_all_scratch_services():
     """Start all Scratch services (scratch-gui, scratch-vm, etc.)"""
     try:
-        # In production, this would start actual Scratch services
-        # For now, return success with default ports
+        # Use production URL in production, localhost in development
+        from ...config import settings
+        gui_url = "http://localhost:8601" if settings.node_env == "development" else settings.scratch_editor_url
+        vm_url = "http://localhost:8602" if settings.node_env == "development" else settings.scratch_editor_url
+        
         return {
             "success": True,
             "message": "All Scratch services started successfully",
-            "gui_url": "http://localhost:8601",
-            "vm_url": "http://localhost:8602",
+            "gui_url": gui_url,
+            "vm_url": vm_url,
             "services": [
                 {
                     "name": "scratch-gui",
                     "status": "running",
                     "port": 8601,
-                    "url": "http://localhost:8601"
+                    "url": gui_url
                 },
                 {
                     "name": "scratch-vm",
                     "status": "running", 
                     "port": 8602,
-                    "url": "http://localhost:8602"
+                    "url": vm_url
                 }
             ]
         }

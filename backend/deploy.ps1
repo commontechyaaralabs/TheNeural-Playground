@@ -40,7 +40,7 @@ gcloud run deploy $SERVICE_NAME `
   --platform managed `
   --allow-unauthenticated `
   --service-account "svc-backend@${PROJECT_ID}.iam.gserviceaccount.com" `
-  --set-env-vars "GOOGLE_CLOUD_PROJECT=$PROJECT_ID,ENVIRONMENT=production,FIRESTORE_DATABASE_ID=(default),GCS_BUCKET_NAME=playgroundai-470111-data,PUBSUB_TOPIC_NAME=train-jobs,CORS_ORIGIN=https://playground.theneural.in;https://scratch-editor-uaaur7no2a-uc.a.run.app,FIRESTORE_BATCH_SIZE=500,GCS_CHUNK_SIZE=8388608" `
+  --set-env-vars "GOOGLE_CLOUD_PROJECT=$PROJECT_ID,ENVIRONMENT=production,FIRESTORE_DATABASE_ID=(default),GCS_BUCKET_NAME=playgroundai-470111-data,PUBSUB_TOPIC_NAME=train-jobs,CORS_ORIGIN=https://playground-theneural.vercel.app;https://scratch-editor-uaaur7no2a-uc.a.run.app,FIRESTORE_BATCH_SIZE=500,GCS_CHUNK_SIZE=8388608" `
   --memory 8Gi `
   --cpu 4 `
   --max-instances 50 `

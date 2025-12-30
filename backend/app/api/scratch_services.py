@@ -241,12 +241,17 @@ async def start_all_services(background_tasks: BackgroundTasks):
         
         status = service_manager.get_service_status()
         
+        # Use production URL in production, localhost in development
+        from ..config import settings
+        gui_url = "http://localhost:8601" if settings.node_env == "development" else settings.scratch_editor_url
+        vm_url = "http://localhost:8602" if settings.node_env == "development" else settings.scratch_editor_url
+        
         return {
             "success": True,
             "message": "All Scratch services started successfully",
             "status": status,
-            "gui_url": "http://localhost:8601",
-            "vm_url": "http://localhost:8602"
+            "gui_url": gui_url,
+            "vm_url": vm_url
         }
         
     except Exception as e:

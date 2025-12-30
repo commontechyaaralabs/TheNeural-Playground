@@ -233,7 +233,7 @@ GOOGLE_CLOUD_PROJECT=your-project-id
 GCS_BUCKET_NAME=your-bucket-name
 PUBSUB_TOPIC_NAME=train-jobs
 FIRESTORE_DATABASE_ID=(default)
-CORS_ORIGIN=https://playground.theneural.in
+CORS_ORIGIN=https://playground-theneural.vercel.app
 JWT_SECRET=your-secret-key
 ```
 

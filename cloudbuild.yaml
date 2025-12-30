@@ -48,7 +48,7 @@ steps:
       - '--timeout'
       - '300'
       - '--set-env-vars'
-      - 'NODE_ENV=production,NEXT_TELEMETRY_DISABLED=1,NEXT_PUBLIC_API_URL=https://theneural-backend-107731139870.us-central1.run.app'
+      - 'NODE_ENV=production,NEXT_TELEMETRY_DISABLED=1,NEXT_PUBLIC_API_URL=https://playgroundai-backend-uaaur7no2a-uc.a.run.app'
 
 images:
   - 'gcr.io/$PROJECT_ID/playground-neural:$COMMIT_SHA'
