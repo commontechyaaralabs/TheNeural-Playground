@@ -1278,6 +1278,11 @@ function CreateProjectPage() {
                          </span>
                        </div>
                      )}
+                     
+                     {/* Spacer for custom-ai-agent to match Model Trained section height */}
+                     {project.type === 'custom-ai-agent' && (
+                       <div className="mb-4 h-6"></div>
+                     )}
                     
                     {/* Teachable Machine Link - Only show for teachable machine projects */}
                     {(project.type === 'image-recognition-teachable-machine' || project.type === 'pose-recognition-teachable-machine') && project.teachable_machine_link && (
