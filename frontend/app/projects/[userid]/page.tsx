@@ -856,11 +856,11 @@ function CreateProjectPage() {
   // };
 
   const handleProjectClick = (project: Project) => {
-    // For teachable machine and text recognition projects, don't redirect - let the Launch button handle it
-    if (project.type === 'image-recognition-teachable-machine' || project.type === 'pose-recognition-teachable-machine' || project.type === 'text-recognition' || project.type === 'image-recognition') {
+    // For teachable machine, text recognition, image recognition, and custom AI agent projects, don't redirect - let the Launch button handle it
+    if (project.type === 'image-recognition-teachable-machine' || project.type === 'pose-recognition-teachable-machine' || project.type === 'text-recognition' || project.type === 'image-recognition' || project.type === 'custom-ai-agent') {
       return;
     } else {
-      // For other project types (including custom-ai-agent), navigate to the project-specific page using masked project ID
+      // For other project types, navigate to the project-specific page using masked project ID
       const projectId = project.maskedId || project.id;
       window.location.href = `/projects/${urlParam}/${projectId}`;
     }
@@ -1193,7 +1193,7 @@ function CreateProjectPage() {
                   <div
                     key={project.id}
                     className={`bg-[#1c1c1c] border border-[#bc6cd3]/20 rounded-xl p-6 hover:bg-[#bc6cd3]/5 transition-all duration-300 ${
-                      project.type === 'image-recognition-teachable-machine' || project.type === 'text-recognition' || project.type === 'image-recognition' ? '' : 'cursor-pointer'
+                      project.type === 'image-recognition-teachable-machine' || project.type === 'text-recognition' || project.type === 'image-recognition' || project.type === 'custom-ai-agent' ? '' : 'cursor-pointer'
                     }`}
                     onClick={() => handleProjectClick(project)}
                   >
@@ -1302,8 +1302,8 @@ function CreateProjectPage() {
                     
                                                               {/* Launch Button and Date Info in Parallel */}
                      <div className={`mt-4 flex items-start justify-between gap-4 ${project.type === 'text-recognition' || project.type === 'image-recognition' ? 'mt-16' : ''}`}>
-                       {/* Launch Button - For teachable machine and text recognition projects */}
-                       {project.type === 'image-recognition-teachable-machine' || project.type === 'pose-recognition-teachable-machine' || project.type === 'text-recognition' || project.type === 'image-recognition' ? (
+                       {/* Launch Button - For teachable machine, text recognition, image recognition, and custom AI agent projects */}
+                       {project.type === 'image-recognition-teachable-machine' || project.type === 'pose-recognition-teachable-machine' || project.type === 'text-recognition' || project.type === 'image-recognition' || project.type === 'custom-ai-agent' ? (
                          <button
                            onClick={(e) => {
                              e.stopPropagation();
