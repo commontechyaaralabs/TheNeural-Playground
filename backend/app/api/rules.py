@@ -16,6 +16,8 @@ class RuleStatusUpdate(BaseModel):
 
 
 def get_rules_service():
+    """Dependency function for RulesService - lazy initialization"""
+    # Service is lazy, so __init__ won't fail - GCP clients initialize on first use
     return RulesService()
 
 

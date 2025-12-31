@@ -57,20 +57,69 @@ class KnowledgeService:
     """Service layer for knowledge base operations"""
     
     def __init__(self):
-        self.firestore_client = gcp_clients.get_firestore_client()
-        self.bucket = gcp_clients.get_bucket()
-        self.project_id = gcp_clients.get_project_id()
+        self._firestore_client = None
+        self._bucket = None
+        self._project_id = None
+        self._knowledge_collection = None
+        self._vertex_ai = None
+        self._agent_service = None
+        self._initialized = False
+    
+    def _ensure_initialized(self):
+        """Lazy initialization - only initialize when first accessed"""
+        if self._initialized:
+            return
         
-        # Initialize collections
-        self.knowledge_collection = self.firestore_client.collection('knowledge')
-        
-        # Initialize Vertex AI service
-        self.vertex_ai = VertexAIService(self.project_id)
-        
-        # Initialize Agent Service for loading settings
-        self.agent_service = AgentService()
-        
-        logger.info("✅ KnowledgeService initialized")
+        try:
+            self._firestore_client = gcp_clients.get_firestore_client()
+            self._bucket = gcp_clients.get_bucket()
+            self._project_id = gcp_clients.get_project_id()
+            
+            # Initialize collections
+            self._knowledge_collection = self._firestore_client.collection('knowledge')
+            
+            # Initialize Vertex AI service
+            self._vertex_ai = VertexAIService(self._project_id)
+            
+            # Initialize Agent Service for loading settings
+            self._agent_service = AgentService()
+            
+            self._initialized = True
+            logger.info("✅ KnowledgeService initialized")
+        except Exception as e:
+            logger.warning(f"⚠️ KnowledgeService initialization deferred (will retry on first use): {e}")
+            # Don't raise - allow schema generation to proceed
+    
+    @property
+    def firestore_client(self):
+        self._ensure_initialized()
+        return self._firestore_client
+    
+    @property
+    def bucket(self):
+        self._ensure_initialized()
+        return self._bucket
+    
+    @property
+    def project_id(self):
+        if self._project_id is None:
+            self._project_id = gcp_clients.get_project_id()
+        return self._project_id
+    
+    @property
+    def knowledge_collection(self):
+        self._ensure_initialized()
+        return self._knowledge_collection
+    
+    @property
+    def vertex_ai(self):
+        self._ensure_initialized()
+        return self._vertex_ai
+    
+    @property
+    def agent_service(self):
+        self._ensure_initialized()
+        return self._agent_service
     
     def _normalize_text(self, text: str) -> str:
         """Normalize text by removing extra whitespace and normalizing newlines"""

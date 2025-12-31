@@ -11,6 +11,8 @@ router = APIRouter(prefix="/chat", tags=["agent"])
 
 
 def get_chat_service():
+    """Dependency function for ChatService - lazy initialization"""
+    # Service is lazy, so __init__ won't fail - GCP clients initialize on first use
     return ChatService()
 
 

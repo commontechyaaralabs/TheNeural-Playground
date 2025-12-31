@@ -15,18 +15,67 @@ class AgentService:
     """Service layer for agent management operations"""
     
     def __init__(self):
-        self.firestore_client = gcp_clients.get_firestore_client()
-        self.project_id = gcp_clients.get_project_id()
+        self._firestore_client = None
+        self._project_id = None
+        self._agents_collection = None
+        self._personas_collection = None
+        self._settings_collection = None
+        self._vertex_ai = None
+        self._initialized = False
+    
+    def _ensure_initialized(self):
+        """Lazy initialization - only initialize when first accessed"""
+        if self._initialized:
+            return
         
-        # Initialize collections
-        self.agents_collection = self.firestore_client.collection('agents')
-        self.personas_collection = self.firestore_client.collection('personas')
-        self.settings_collection = self.firestore_client.collection('agent_settings')
-        
-        # Initialize Vertex AI service
-        self.vertex_ai = VertexAIService(self.project_id)
-        
-        logger.info("✅ AgentService initialized")
+        try:
+            self._firestore_client = gcp_clients.get_firestore_client()
+            self._project_id = gcp_clients.get_project_id()
+            
+            # Initialize collections
+            self._agents_collection = self._firestore_client.collection('agents')
+            self._personas_collection = self._firestore_client.collection('personas')
+            self._settings_collection = self._firestore_client.collection('agent_settings')
+            
+            # Initialize Vertex AI service
+            self._vertex_ai = VertexAIService(self._project_id)
+            
+            self._initialized = True
+            logger.info("✅ AgentService initialized")
+        except Exception as e:
+            logger.warning(f"⚠️ AgentService initialization deferred (will retry on first use): {e}")
+            # Don't raise - allow schema generation to proceed
+    
+    @property
+    def firestore_client(self):
+        self._ensure_initialized()
+        return self._firestore_client
+    
+    @property
+    def project_id(self):
+        if self._project_id is None:
+            self._project_id = gcp_clients.get_project_id()
+        return self._project_id
+    
+    @property
+    def agents_collection(self):
+        self._ensure_initialized()
+        return self._agents_collection
+    
+    @property
+    def personas_collection(self):
+        self._ensure_initialized()
+        return self._personas_collection
+    
+    @property
+    def settings_collection(self):
+        self._ensure_initialized()
+        return self._settings_collection
+    
+    @property
+    def vertex_ai(self):
+        self._ensure_initialized()
+        return self._vertex_ai
     
     def create_agent(self, request: AgentCreateRequest) -> Agent:
         """Create a new agent from description"""

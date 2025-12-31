@@ -11,3 +11,4 @@ from . import knowledge
 from . import rules
 from . import chat
 from . import internal
+from . import training_chat

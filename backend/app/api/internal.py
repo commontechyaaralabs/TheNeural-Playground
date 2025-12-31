@@ -7,7 +7,14 @@ router = APIRouter(prefix="/internal", tags=["agent"])
 
 
 def get_agent_service():
-    return AgentService()
+    """Dependency function for AgentService - lazy initialization"""
+    try:
+        return AgentService()
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(f"AgentService initialization deferred: {e}")
+        return AgentService()
 
 
 @router.post("/cleanup", response_model=CleanupResponse)

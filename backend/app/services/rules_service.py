@@ -48,26 +48,69 @@ class RulesService:
     ]
     
     def __init__(self):
-        self.firestore_client = gcp_clients.get_firestore_client()
-        self.project_id = gcp_clients.get_project_id()
+        self._firestore_client = None
+        self._project_id = None
+        self._rules_collection = None
+        self._vertex_ai = None
+        self._agent_service = None
+        self._initialized = False
+    
+    def _ensure_initialized(self):
+        """Lazy initialization - only initialize when first accessed"""
+        if self._initialized:
+            return
         
-        # Initialize collections
-        self.rules_collection = self.firestore_client.collection('rules')
-        
-        # Initialize LLM service for smart rule matching
-        self.vertex_ai = None
-        if LLM_AVAILABLE:
-            try:
-                self.vertex_ai = VertexAIService(self.project_id)
-                logger.info("✅ RulesService initialized with LLM-based matching")
-            except Exception as e:
-                logger.warning(f"⚠️ Failed to initialize VertexAI for rules: {e}")
+        try:
+            self._firestore_client = gcp_clients.get_firestore_client()
+            self._project_id = gcp_clients.get_project_id()
+            
+            # Initialize collections
+            self._rules_collection = self._firestore_client.collection('rules')
+            
+            # Initialize LLM service for smart rule matching
+            if LLM_AVAILABLE:
+                try:
+                    self._vertex_ai = VertexAIService(self._project_id)
+                    logger.info("✅ RulesService initialized with LLM-based matching")
+                except Exception as e:
+                    logger.warning(f"⚠️ Failed to initialize VertexAI for rules: {e}")
+                    logger.info("✅ RulesService initialized with code-based matching only")
+            else:
                 logger.info("✅ RulesService initialized with code-based matching only")
-        else:
-            logger.info("✅ RulesService initialized with code-based matching only")
-        
-        # Initialize Agent Service for loading settings
-        self.agent_service = AgentService()
+            
+            # Initialize Agent Service for loading settings
+            self._agent_service = AgentService()
+            
+            self._initialized = True
+        except Exception as e:
+            logger.warning(f"⚠️ RulesService initialization deferred (will retry on first use): {e}")
+            # Don't raise - allow schema generation to proceed
+    
+    @property
+    def firestore_client(self):
+        self._ensure_initialized()
+        return self._firestore_client
+    
+    @property
+    def project_id(self):
+        if self._project_id is None:
+            self._project_id = gcp_clients.get_project_id()
+        return self._project_id
+    
+    @property
+    def rules_collection(self):
+        self._ensure_initialized()
+        return self._rules_collection
+    
+    @property
+    def vertex_ai(self):
+        self._ensure_initialized()
+        return self._vertex_ai
+    
+    @property
+    def agent_service(self):
+        self._ensure_initialized()
+        return self._agent_service
     
     def save_rule(self, request: RuleSaveRequest) -> Rule:
         """Create or update a rule with multiple conditions and actions"""

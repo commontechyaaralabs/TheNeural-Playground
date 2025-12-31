@@ -7,8 +7,9 @@ logger = logging.getLogger(__name__)
 
 
 @router.get("/health")
+@router.head("/health")
 async def health_check():
-    """Health check endpoint for Cloud Run"""
+    """Health check endpoint for Cloud Run - supports both GET and HEAD"""
     try:
         # Check spaCy model availability (non-blocking, optional)
         import spacy

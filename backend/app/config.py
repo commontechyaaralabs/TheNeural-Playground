@@ -52,47 +52,76 @@ settings = Settings()
 
 
 class GCPClients:
-    """GCP client initialization using Application Default Credentials"""
+    """GCP client initialization using Application Default Credentials with lazy loading"""
     
     def __init__(self):
         self.project_id = settings.google_cloud_project
+        self._firestore_client = None
+        self._storage_client = None
+        self._pubsub_client = None
+        self._subscriber_client = None
+        self._projects_collection = None
+        self._bucket = None
+        self._topic_path = None
+        self._initialized = False
+    
+    def _ensure_initialized(self):
+        """Lazy initialization - only initialize when first accessed"""
+        if self._initialized:
+            return
         
-        # Initialize Firestore client
-        self.firestore_client = firestore.Client(project=self.project_id)
-        self.projects_collection = self.firestore_client.collection('projects')
-        
-        # Initialize Storage client
-        self.storage_client = storage.Client(project=self.project_id)
-        self.bucket = self.storage_client.bucket(settings.gcs_bucket_name)
-        
-        # Initialize Pub/Sub clients
-        self.pubsub_client = pubsub_v1.PublisherClient()
-        self.subscriber_client = pubsub_v1.SubscriberClient()  # Added SubscriberClient
-        self.topic_path = self.pubsub_client.topic_path(
-            self.project_id, 
-            settings.pubsub_topic_name
-        )
+        try:
+            # Initialize Firestore client
+            self._firestore_client = firestore.Client(project=self.project_id)
+            self._projects_collection = self._firestore_client.collection('projects')
+            
+            # Initialize Storage client
+            self._storage_client = storage.Client(project=self.project_id)
+            self._bucket = self._storage_client.bucket(settings.gcs_bucket_name)
+            
+            # Initialize Pub/Sub clients
+            self._pubsub_client = pubsub_v1.PublisherClient()
+            self._subscriber_client = pubsub_v1.SubscriberClient()
+            self._topic_path = self._pubsub_client.topic_path(
+                self.project_id, 
+                settings.pubsub_topic_name
+            )
+            
+            self._initialized = True
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to initialize GCP clients: {e}")
+            # Don't raise - allow app to start, clients will be initialized on first use
+            # In Cloud Run, credentials should be available when endpoints are called
     
     def get_firestore_client(self):
-        return self.firestore_client
+        self._ensure_initialized()
+        return self._firestore_client
     
     def get_storage_client(self):
-        return self.storage_client
+        self._ensure_initialized()
+        return self._storage_client
     
     def get_pubsub_client(self):
-        return self.pubsub_client
+        self._ensure_initialized()
+        return self._pubsub_client
     
-    def get_subscriber_client(self):  # Added method
-        return self.subscriber_client
+    def get_subscriber_client(self):
+        self._ensure_initialized()
+        return self._subscriber_client
     
     def get_projects_collection(self):
-        return self.projects_collection
+        self._ensure_initialized()
+        return self._projects_collection
     
     def get_bucket(self):
-        return self.bucket
+        self._ensure_initialized()
+        return self._bucket
     
     def get_topic_path(self):
-        return self.topic_path
+        self._ensure_initialized()
+        return self._topic_path
     
     def get_project_id(self):
         return self.project_id
@@ -101,11 +130,13 @@ class GCPClients:
         return settings.pubsub_topic_name
     
     def get_subscription_path(self):
-        return self.subscriber_client.subscription_path(
+        self._ensure_initialized()
+        return self._subscriber_client.subscription_path(
             self.project_id, 
             "trainer-sub"
         )
 
 
-# Global GCP clients instance
+# Global GCP clients instance - lazy initialization
+# This will NOT initialize clients at import time, only when first accessed
 gcp_clients = GCPClients()

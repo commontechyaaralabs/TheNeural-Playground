@@ -20,11 +20,38 @@ class GuestService:
     """Service for managing guest sessions and their embedded projects"""
     
     def __init__(self):
+        self._db = None
+        self._projects_collection = None
+        self._session_collection = None
+        self._initialized = False
+    
+    def _ensure_initialized(self):
+        """Lazy initialization - only initialize when first accessed"""
+        if self._initialized:
+            return
+        
         # Use the centralized GCP configuration
-        self.db = gcp_clients.get_firestore_client()
+        self._db = gcp_clients.get_firestore_client()
         # Guest projects are stored in the projects collection, not a separate guests collection
-        self.projects_collection = self.db.collection("projects")
-        self.session_collection = self.db.collection("guest_sessions")
+        self._projects_collection = self._db.collection("projects")
+        self._session_collection = self._db.collection("guest_sessions")
+        
+        self._initialized = True
+    
+    @property
+    def db(self):
+        self._ensure_initialized()
+        return self._db
+    
+    @property
+    def projects_collection(self):
+        self._ensure_initialized()
+        return self._projects_collection
+    
+    @property
+    def session_collection(self):
+        self._ensure_initialized()
+        return self._session_collection
     
     async def create_guest_session(self, guest_data: GuestCreate, ip_address: Optional[str] = None, user_agent: Optional[str] = None) -> dict:
         """Create a new guest session with embedded project data"""

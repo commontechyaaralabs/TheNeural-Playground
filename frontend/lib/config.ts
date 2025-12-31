@@ -1,12 +1,12 @@
 // Configuration for the Neural Playground frontend - Updated for local development
 export const config = {
   // Backend API base URL
-  apiBaseUrl: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080', // Backend running on localhost
+  apiBaseUrl: process.env.NEXT_PUBLIC_API_URL || 'https://playground-backend-v2-uaaur7no2a-uc.a.run.app',
   
   // Scratch Editor URLs
   scratchEditor: {
-    gui: process.env.NEXT_PUBLIC_SCRATCH_EDITOR_URL || 'http://localhost:8601',
-    vm: process.env.NEXT_PUBLIC_SCRATCH_VM_URL || 'http://localhost:8602',
+    gui: process.env.NEXT_PUBLIC_SCRATCH_EDITOR_URL || 'https://scratch-editor-uaaur7no2a-uc.a.run.app',
+    vm: process.env.NEXT_PUBLIC_SCRATCH_VM_URL || 'https://scratch-editor-uaaur7no2a-uc.a.run.app',
   },
   
   // API endpoints

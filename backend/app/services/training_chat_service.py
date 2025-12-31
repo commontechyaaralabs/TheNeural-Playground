@@ -41,22 +41,95 @@ class TrainingChatService:
     """Service for conversational agent training"""
     
     def __init__(self):
-        self.firestore_client = gcp_clients.get_firestore_client()
-        self.project_id = gcp_clients.get_project_id()
+        self._firestore_client = None
+        self._project_id = None
+        self._training_sessions_collection = None
+        self._training_messages_collection = None
+        self._pending_changes_collection = None
+        self._chats_collection = None
+        self._vertex_ai = None
+        self._agent_service = None
+        self._knowledge_service = None
+        self._rules_service = None
+        self._initialized = False
+    
+    def _ensure_initialized(self):
+        """Lazy initialization - only initialize when first accessed"""
+        if self._initialized:
+            return
         
-        # Initialize collections
-        self.training_sessions_collection = self.firestore_client.collection('training_sessions')
-        self.training_messages_collection = self.firestore_client.collection('training_messages')
-        self.pending_changes_collection = self.firestore_client.collection('pending_changes')
-        self.chats_collection = self.firestore_client.collection('training_chats')  # New collection for chat management
-        
-        # Initialize services
-        self.vertex_ai = VertexAIService(self.project_id)
-        self.agent_service = AgentService()
-        self.knowledge_service = KnowledgeService()
-        self.rules_service = RulesService()
-        
-        logger.info("✅ TrainingChatService initialized")
+        try:
+            self._firestore_client = gcp_clients.get_firestore_client()
+            self._project_id = gcp_clients.get_project_id()
+            
+            # Initialize collections
+            self._training_sessions_collection = self._firestore_client.collection('training_sessions')
+            self._training_messages_collection = self._firestore_client.collection('training_messages')
+            self._pending_changes_collection = self._firestore_client.collection('pending_changes')
+            self._chats_collection = self._firestore_client.collection('training_chats')
+            
+            # Initialize services
+            self._vertex_ai = VertexAIService(self._project_id)
+            self._agent_service = AgentService()
+            self._knowledge_service = KnowledgeService()
+            self._rules_service = RulesService()
+            
+            self._initialized = True
+            logger.info("✅ TrainingChatService initialized")
+        except Exception as e:
+            logger.warning(f"⚠️ TrainingChatService initialization deferred (will retry on first use): {e}")
+            # Don't raise - allow schema generation to proceed
+    
+    @property
+    def firestore_client(self):
+        self._ensure_initialized()
+        return self._firestore_client
+    
+    @property
+    def project_id(self):
+        if self._project_id is None:
+            self._project_id = gcp_clients.get_project_id()
+        return self._project_id
+    
+    @property
+    def training_sessions_collection(self):
+        self._ensure_initialized()
+        return self._training_sessions_collection
+    
+    @property
+    def training_messages_collection(self):
+        self._ensure_initialized()
+        return self._training_messages_collection
+    
+    @property
+    def pending_changes_collection(self):
+        self._ensure_initialized()
+        return self._pending_changes_collection
+    
+    @property
+    def chats_collection(self):
+        self._ensure_initialized()
+        return self._chats_collection
+    
+    @property
+    def vertex_ai(self):
+        self._ensure_initialized()
+        return self._vertex_ai
+    
+    @property
+    def agent_service(self):
+        self._ensure_initialized()
+        return self._agent_service
+    
+    @property
+    def knowledge_service(self):
+        self._ensure_initialized()
+        return self._knowledge_service
+    
+    @property
+    def rules_service(self):
+        self._ensure_initialized()
+        return self._rules_service
     
     def _clean_json_response(self, response: str, model_name: Optional[str] = None) -> str:
         """Clean JSON response, especially for flash-lite which may add extra text"""

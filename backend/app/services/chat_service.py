@@ -19,20 +19,81 @@ class ChatService:
     """Service layer for chat operations with rule engine and KB retrieval"""
     
     def __init__(self):
-        self.firestore_client = gcp_clients.get_firestore_client()
-        self.project_id = gcp_clients.get_project_id()
+        self._firestore_client = None
+        self._project_id = None
+        self._chat_logs_collection = None
+        self._agent_service = None
+        self._knowledge_service = None
+        self._rules_service = None
+        self._vertex_ai = None
+        self._image_search = None
+        self._initialized = False
+    
+    def _ensure_initialized(self):
+        """Lazy initialization - only initialize when first accessed"""
+        if self._initialized:
+            return
         
-        # Initialize collections
-        self.chat_logs_collection = self.firestore_client.collection('chat_logs')
-        
-        # Initialize services
-        self.agent_service = AgentService()
-        self.knowledge_service = KnowledgeService()
-        self.rules_service = RulesService()
-        self.vertex_ai = VertexAIService(self.project_id)
-        self.image_search = get_image_search_service()
-        
-        logger.info("✅ ChatService initialized")
+        try:
+            self._firestore_client = gcp_clients.get_firestore_client()
+            self._project_id = gcp_clients.get_project_id()
+            
+            # Initialize collections
+            self._chat_logs_collection = self._firestore_client.collection('chat_logs')
+            
+            # Initialize services
+            self._agent_service = AgentService()
+            self._knowledge_service = KnowledgeService()
+            self._rules_service = RulesService()
+            self._vertex_ai = VertexAIService(self._project_id)
+            self._image_search = get_image_search_service()
+            
+            self._initialized = True
+            logger.info("✅ ChatService initialized")
+        except Exception as e:
+            logger.warning(f"⚠️ ChatService initialization deferred (will retry on first use): {e}")
+            # Don't raise - allow schema generation to proceed
+    
+    @property
+    def firestore_client(self):
+        self._ensure_initialized()
+        return self._firestore_client
+    
+    @property
+    def project_id(self):
+        if self._project_id is None:
+            self._project_id = gcp_clients.get_project_id()
+        return self._project_id
+    
+    @property
+    def chat_logs_collection(self):
+        self._ensure_initialized()
+        return self._chat_logs_collection
+    
+    @property
+    def agent_service(self):
+        self._ensure_initialized()
+        return self._agent_service
+    
+    @property
+    def knowledge_service(self):
+        self._ensure_initialized()
+        return self._knowledge_service
+    
+    @property
+    def rules_service(self):
+        self._ensure_initialized()
+        return self._rules_service
+    
+    @property
+    def vertex_ai(self):
+        self._ensure_initialized()
+        return self._vertex_ai
+    
+    @property
+    def image_search(self):
+        self._ensure_initialized()
+        return self._image_search
     
     def chat(self, request: ChatRequest) -> Dict[str, Any]:
         """Process chat message with rule engine and KB retrieval"""

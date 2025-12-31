@@ -25,6 +25,8 @@ router = APIRouter(prefix="/training", tags=["training"])
 
 
 def get_training_service():
+    """Dependency function for TrainingChatService - lazy initialization"""
+    # Service is lazy, so __init__ won't fail - GCP clients initialize on first use
     return TrainingChatService()
 
 

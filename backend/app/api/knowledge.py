@@ -17,6 +17,8 @@ router = APIRouter(prefix="/kb", tags=["agent"])
 
 
 def get_knowledge_service():
+    """Dependency function for KnowledgeService - lazy initialization"""
+    # Service is lazy, so __init__ won't fail - GCP clients initialize on first use
     return KnowledgeService()
 
 

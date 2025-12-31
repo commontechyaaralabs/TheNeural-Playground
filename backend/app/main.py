@@ -1,110 +1,141 @@
-from fastapi import FastAPI, Request, BackgroundTasks
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
 import time
 import logging
-import asyncio
-import threading
 import os
 
 from .config import settings
-from .api import projects, health, teachers, students, classrooms, demo_projects, scratch_services
+from .api import (
+    projects,
+    health,
+    teachers,
+    students,
+    classrooms,
+    demo_projects,
+    scratch_services,
+    agents,
+    knowledge,
+    rules,
+    chat,
+    internal,
+    training_chat,
+)
 from .api.guests import router as guests_router
-from .api import agents, knowledge, rules, chat, internal, training_chat
-from .training_worker import training_worker
 
-# Configure logging
+# --------------------------------------------------
+# Logging
+# --------------------------------------------------
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Create FastAPI app
+# --------------------------------------------------
+# FastAPI App
+# --------------------------------------------------
 app = FastAPI(
     title="TheNeural Backend API",
     description="Backend service for ML project management with GCP integration",
     version="1.0.0",
     docs_url="/docs",
-    redoc_url="/redoc"
+    redoc_url="/redoc",
+    # Ensure schema generation doesn't fail on errors
+    openapi_url="/openapi.json",
 )
 
-# Define allowed origins for CORS
+# --------------------------------------------------
+# CORS Configuration
+# --------------------------------------------------
 origins = [
-    "https://playground-theneural.vercel.app",   # Vercel Frontend
-    "http://localhost:8601",     # Scratch Editor (local)
-    "http://localhost:8602",     # Scratch VM (local)
-    "https://scratch-editor-uaaur7no2a-uc.a.run.app",  # Production Scratch Editor
-    "https://playgroundai-backend-uaaur7no2a-uc.a.run.app",  # Backend URL
-    "http://localhost:3000",   # Next.js dev server
-    "http://localhost:8080",   # Backend API (local)
+    "https://playground-theneural.vercel.app",
+    "https://scratch-editor-uaaur7no2a-uc.a.run.app",
+    "https://playgroundai-backend-uaaur7no2a-uc.a.run.app",
+    "http://localhost:3000",
+    "http://localhost:8080",
 ]
 
-# Add additional origins from environment variable if specified
+# Allow dynamic origins from env (comma-separated)
 if settings.cors_origin:
-    # Handle multiple origins separated by commas
-    additional_origins = [origin.strip() for origin in settings.cors_origin.split(',')]
-    for origin in additional_origins:
-        if origin and origin not in origins:
-            origins.append(origin)
+    extra_origins = [o.strip() for o in settings.cors_origin.split(",")]
+    origins.extend([o for o in extra_origins if o])
 
-# Add CORS middleware - UPDATED CONFIGURATION
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,        # Allow listed origins
+    allow_origins=list(set(origins)),
     allow_credentials=True,
-    allow_methods=["*"],          # Allow all HTTP methods (GET, POST, PUT, DELETE, OPTIONS)
-    allow_headers=["*"],          # Allow all headers
-    expose_headers=["*"],         # Expose all headers
-    max_age=86400,               # Cache preflight response for 24 hours
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
+# Trust all hosts (lock this down later if needed)
 app.add_middleware(
     TrustedHostMiddleware,
-    allowed_hosts=["*"]  # In production, restrict this
+    allowed_hosts=["*"],
 )
 
-# Request timing middleware
+# --------------------------------------------------
+# Request Timing Middleware
+# --------------------------------------------------
 @app.middleware("http")
 async def add_process_time_header(request: Request, call_next):
     start_time = time.time()
     response = await call_next(request)
-    process_time = time.time() - start_time
-    response.headers["X-Process-Time"] = str(process_time)
+    response.headers["X-Process-Time"] = str(time.time() - start_time)
     return response
 
-# CORS debugging middleware
-@app.middleware("http")
-async def cors_debug_middleware(request: Request, call_next):
-    """Debug middleware for CORS issues"""
-    # Log CORS-related headers
-    origin = request.headers.get("origin")
-    if origin:
-        logger.info(f"CORS request from origin: {origin}")
-        logger.info(f"Request method: {request.method}")
-        logger.info(f"Request path: {request.url.path}")
-        logger.info(f"Origin in allowed list: {origin in origins}")
-    
-    response = await call_next(request)
-    
-    # Log CORS response headers
-    if origin:
-        logger.info(f"CORS response headers: {dict(response.headers)}")
-    
-    return response
-
-# Global exception handler
+# --------------------------------------------------
+# Global Exception Handler
+# --------------------------------------------------
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    logger.error(f"Global exception: {exc}", exc_info=True)
+    logger.error("Unhandled exception", exc_info=True)
     return JSONResponse(
         status_code=500,
         content={
             "success": False,
             "error": "Internal server error",
-            "details": [str(exc)] if settings.node_env == "development" else []
-        }
+            "details": [str(exc)] if settings.node_env == "development" else [],
+        },
     )
 
-# Include routers
+# --------------------------------------------------
+# Health Check (CRITICAL FOR CLOUD RUN)
+# Supports both GET and HEAD for Cloud Run health checks
+# --------------------------------------------------
+@app.get("/health")
+@app.head("/health")
+def health_check():
+    return {"status": "ok"}
+
+# --------------------------------------------------
+# Diagnostic Endpoint - Check Router Registration
+# --------------------------------------------------
+@app.get("/api/diagnostics/routes")
+def check_routes():
+    """Diagnostic endpoint to verify all routes are registered"""
+    critical_paths = ["/agent", "/kb", "/rules", "/chat", "/training"]
+    route_info = {}
+    
+    for prefix in critical_paths:
+        routes = [r.path for r in app.routes if hasattr(r, 'path') and r.path.startswith(prefix)]
+        route_info[prefix] = {
+            "registered": len(routes) > 0,
+            "count": len(routes),
+            "sample_routes": routes[:5]  # First 5 routes
+        }
+    
+    all_registered = all(info["registered"] for info in route_info.values())
+    
+    return {
+        "status": "ok" if all_registered else "warning",
+        "message": "All critical routes registered" if all_registered else "Some routes missing",
+        "routes": route_info,
+        "total_routes": len([r for r in app.routes if hasattr(r, 'path')])
+    }
+
+# --------------------------------------------------
+# Routers
+# --------------------------------------------------
 app.include_router(health.router)
 app.include_router(projects.router)
 app.include_router(teachers.router)
@@ -114,101 +145,121 @@ app.include_router(demo_projects.router)
 app.include_router(guests_router)
 app.include_router(scratch_services.router)
 
-# Agent Creation API routers
-app.include_router(agents.router)
-app.include_router(knowledge.router)
-app.include_router(rules.router)
-app.include_router(chat.router)
-app.include_router(internal.router)
-app.include_router(training_chat.router)
+# Agent / Chat APIs - with error handling to catch registration failures
+logger.info("🔍 Attempting to register agent routers...")
 
-# Add explicit OPTIONS handler for CORS preflight
-@app.options("/{full_path:path}")
-async def options_handler(request: Request):
-    """Handle OPTIONS requests for CORS preflight"""
-    origin = request.headers.get("origin")
-    logger.info(f"OPTIONS preflight request from origin: {origin}")
-    logger.info(f"Allowed origins: {origins}")
-    
-    if origin in origins:
-        logger.info(f"CORS preflight successful for origin: {origin}")
-        return {
-            "message": "CORS preflight successful",
-            "allowed_origin": origin
-        }
+# Register routers with explicit error handling and verification
+# IMPORTANT: Router registration happens BEFORE service initialization
+# Services are only initialized when endpoints are called (via Depends)
+routers_to_register = [
+    ("agents", agents.router, "/agent"),
+    ("knowledge", knowledge.router, "/kb"),
+    ("rules", rules.router, "/rules"),
+    ("chat", chat.router, "/chat"),
+    ("internal", internal.router, "/internal"),
+    ("training_chat", training_chat.router, "/training"),
+]
+
+registered_count = 0
+failed_routers = []
+
+for name, router, prefix in routers_to_register:
+    try:
+        logger.info(f"🔍 Registering {name} router (prefix: {prefix})...")
+        # Check if router exists
+        if router is None:
+            raise ValueError(f"Router {name} is None - import may have failed")
+        
+        # Register the router
+        app.include_router(router)
+        registered_count += 1
+        logger.info(f"✅ {name.capitalize()} router registered successfully")
+        
+        # Verify it was added
+        route_count_before = len([r for r in app.routes if hasattr(r, 'path') and r.path.startswith(prefix)])
+        logger.info(f"   Routes with prefix {prefix}: {route_count_before}")
+        
+    except Exception as e:
+        failed_routers.append(name)
+        error_msg = f"❌ CRITICAL: Failed to register {name} router: {e}"
+        logger.error(error_msg, exc_info=True)
+        # Print to stderr as well to ensure visibility in Cloud Run logs
+        import sys
+        print(f"ERROR: Failed to register {name} router: {e}", file=sys.stderr, flush=True)
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+
+if failed_routers:
+    logger.error(f"❌ FAILED TO REGISTER ROUTERS: {failed_routers}")
+    import sys
+    print(f"CRITICAL ERROR: Failed to register routers: {failed_routers}", file=sys.stderr, flush=True)
+else:
+    logger.info(f"✅ Successfully registered {registered_count}/{len(routers_to_register)} routers")
+
+logger.info(f"🔍 Total routes registered: {len(app.routes)}")
+
+# Verify critical routes are present
+critical_paths = ["/agent", "/kb", "/rules", "/chat", "/training"]
+found_paths = []
+route_paths_by_prefix = {path: [] for path in critical_paths}
+
+for route in app.routes:
+    if hasattr(route, 'path'):
+        route_path = route.path
+        for critical in critical_paths:
+            if route_path.startswith(critical):
+                found_paths.append(critical)
+                route_paths_by_prefix[critical].append(route_path)
+                break
+
+# Log detailed route information
+for prefix in critical_paths:
+    routes = route_paths_by_prefix[prefix]
+    if routes:
+        logger.info(f"✅ Found {len(routes)} routes for {prefix}:")
+        for r in routes[:5]:  # Show first 5
+            logger.info(f"   - {r}")
+        if len(routes) > 5:
+            logger.info(f"   ... and {len(routes) - 5} more")
     else:
-        logger.warning(f"CORS preflight failed for origin: {origin}")
-        return {
-            "message": "CORS preflight failed",
-            "requested_origin": origin,
-            "allowed_origins": origins
-        }
+        logger.warning(f"⚠️ No routes found for {prefix}")
 
-def start_training_worker():
-    """Start training worker in background thread"""
-    try:
-        logger.info("Starting training worker in background...")
-        training_worker.start_worker()
-    except Exception as e:
-        logger.error(f"Failed to start training worker: {e}")
+# Check if all critical routes are registered
+missing_paths = set(critical_paths) - set(found_paths)
+if missing_paths:
+    logger.error(f"❌ CRITICAL: Missing route prefixes: {missing_paths}")
+    import sys
+    print(f"CRITICAL ERROR: Missing API route prefixes: {missing_paths}", file=sys.stderr, flush=True)
+    print(f"This means the following APIs will NOT work: {missing_paths}", file=sys.stderr, flush=True)
+else:
+    logger.info(f"✅ All critical route prefixes verified: {critical_paths}")
+    total_critical_routes = sum(len(routes) for routes in route_paths_by_prefix.values())
+    logger.info(f"✅ Total critical API routes: {total_critical_routes}")
 
-async def start_training_worker_async():
-    """Start training worker in background thread (async)"""
-    try:
-        # Wait a bit for the server to be fully up
-        await asyncio.sleep(2)
-        logger.info("Starting training worker in background (async)...")
-        await asyncio.get_running_loop().run_in_executor(None, start_training_worker)
-        logger.info("Training worker started in background (async)")
-    except Exception as e:
-        logger.error(f"Failed to start training worker (async): {e}")
-
-async def check_spacy_model_async():
-    """Check if spaCy model is available (async)"""
-    try:
-        await asyncio.sleep(1)  # Small delay to not block startup
-        import spacy
-        nlp = spacy.load("en_core_web_sm")
-        logger.info("✅ spaCy English model loaded successfully (async)")
-    except ImportError:
-        logger.info("📝 spaCy not installed yet - will install when needed (async)")
-    except OSError:
-        logger.info("📥 spaCy model not downloaded yet - will download when needed (async)")
-    except Exception as e:
-        logger.warning(f"⚠️ spaCy model check failed (async): {e}")
-        logger.info("📝 Model will be downloaded when first training request is made (async)")
-
-# Startup event - Keep it lightweight for Cloud Run health checks
+# --------------------------------------------------
+# Startup / Shutdown (KEEP LIGHTWEIGHT)
+# --------------------------------------------------
 @app.on_event("startup")
 async def startup_event():
-    logger.info("Starting TheNeural Backend API...")
+    logger.info("✅ TheNeural Backend API starting")
     logger.info(f"Environment: {settings.node_env}")
     logger.info(f"GCP Project: {settings.google_cloud_project}")
-    logger.info(f"CORS Origin: {settings.cors_origin}")
-    
-    try:
-        # Start background tasks without blocking startup
-        asyncio.create_task(check_spacy_model_async())
-        asyncio.create_task(start_training_worker_async())
-        
-        logger.info("✅ TheNeural Backend API startup complete - background tasks starting...")
-    except Exception as e:
-        logger.error(f"⚠️ Some background tasks failed to start: {e}")
-        logger.info("📝 Application will continue without background tasks")
-        # Don't fail startup - allow the app to run without background services
+    logger.info("🚀 Startup complete (no background workers)")
 
-# Shutdown event
 @app.on_event("shutdown")
 async def shutdown_event():
-    logger.info("Shutting down TheNeural Backend API...")
+    logger.info("🛑 Shutting down TheNeural Backend API")
 
+# --------------------------------------------------
+# Local Dev Entry Point (NOT used in Cloud Run)
+# --------------------------------------------------
 if __name__ == "__main__":
     import uvicorn
-    # Use PORT environment variable for Cloud Run compatibility, default to 8080
+
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run(
         "app.main:app",
         host="0.0.0.0",
         port=port,
-        reload=settings.node_env == "development"
+        reload=settings.node_env == "development",
     )

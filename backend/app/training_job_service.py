@@ -14,15 +14,66 @@ class TrainingJobService:
     """Service for managing training jobs and queue"""
     
     def __init__(self):
-        self.firestore_client = gcp_clients.get_firestore_client()
-        self.storage_client = gcp_clients.get_storage_client()
-        self.pubsub_client = gcp_clients.get_pubsub_client()
-        self.topic_path = gcp_clients.get_topic_path()
+        self._firestore_client = None
+        self._storage_client = None
+        self._pubsub_client = None
+        self._topic_path = None
+        self._jobs_collection = None
+        self._projects_collection = None
+        self._bucket = None
+        self._initialized = False
+    
+    def _ensure_initialized(self):
+        """Lazy initialization - only initialize when first accessed"""
+        if self._initialized:
+            return
+        
+        self._firestore_client = gcp_clients.get_firestore_client()
+        self._storage_client = gcp_clients.get_storage_client()
+        self._pubsub_client = gcp_clients.get_pubsub_client()
+        self._topic_path = gcp_clients.get_topic_path()
         
         # Collections
-        self.jobs_collection = self.firestore_client.collection('training_jobs')
-        self.projects_collection = self.firestore_client.collection('projects')
-        self.bucket = gcp_clients.get_bucket()
+        self._jobs_collection = self._firestore_client.collection('training_jobs')
+        self._projects_collection = self._firestore_client.collection('projects')
+        self._bucket = gcp_clients.get_bucket()
+        
+        self._initialized = True
+    
+    @property
+    def firestore_client(self):
+        self._ensure_initialized()
+        return self._firestore_client
+    
+    @property
+    def storage_client(self):
+        self._ensure_initialized()
+        return self._storage_client
+    
+    @property
+    def pubsub_client(self):
+        self._ensure_initialized()
+        return self._pubsub_client
+    
+    @property
+    def topic_path(self):
+        self._ensure_initialized()
+        return self._topic_path
+    
+    @property
+    def jobs_collection(self):
+        self._ensure_initialized()
+        return self._jobs_collection
+    
+    @property
+    def projects_collection(self):
+        self._ensure_initialized()
+        return self._projects_collection
+    
+    @property
+    def bucket(self):
+        self._ensure_initialized()
+        return self._bucket
     
     async def create_training_job(self, project_id: str, config: Optional[dict] = None) -> TrainingJob:
         """Create a new training job and add to queue"""
