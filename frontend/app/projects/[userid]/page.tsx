@@ -1022,7 +1022,7 @@ function CreateProjectPage() {
                         BUILD
                       </h2>
                       <p className="text-white mb-8 text-sm md:text-base leading-relaxed min-h-[3rem]">
-                        Add knowledge base (text, files, links, Q&A) and create rules for your AI agent
+                        Add knowledge base (text, files, links) and create rules for your AI agent
                       </p>
                       <button 
                         onClick={() => {

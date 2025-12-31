@@ -2482,21 +2482,6 @@ export default function ProjectDetailsPage() {
                                   <h3 className="font-semibold text-white mb-2">LINK</h3>
                                   <p className="text-sm text-gray-400">Scrape website content to train your Agent</p>
                                 </button>
-
-                                <button className="bg-purple-500/10 border-2 border-purple-500/30 rounded-lg p-6 text-left hover:border-purple-500/50 hover:bg-purple-500/15 transition-all group opacity-50 cursor-not-allowed">
-                                  <div className="flex items-center justify-between mb-3">
-                                    <div className="w-12 h-12 bg-purple-500 rounded-lg flex items-center justify-center">
-                                      <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                                      </svg>
-                                    </div>
-                                    <svg className="w-5 h-5 text-gray-400 group-hover:text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                                    </svg>
-                                  </div>
-                                  <h3 className="font-semibold text-white mb-2">QUESTIONS & ANSWER</h3>
-                                  <p className="text-sm text-gray-400">Q&A pairing (Coming soon)</p>
-                                </button>
                               </div>
                             </>
                           ) : knowledgeView === 'text' ? (
