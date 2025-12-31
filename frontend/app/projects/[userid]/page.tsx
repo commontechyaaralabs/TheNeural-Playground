@@ -1301,7 +1301,7 @@ function CreateProjectPage() {
                     )}
                     
                                                               {/* Launch Button and Date Info in Parallel */}
-                     <div className={`mt-4 flex items-start justify-between gap-4 ${project.type === 'text-recognition' || project.type === 'image-recognition' ? 'mt-16' : ''}`}>
+                     <div className={`mt-4 flex items-start justify-between gap-4 ${project.type === 'text-recognition' || project.type === 'image-recognition' || project.type === 'custom-ai-agent' ? 'mt-16' : ''}`}>
                        {/* Launch Button - For teachable machine, text recognition, image recognition, and custom AI agent projects */}
                        {project.type === 'image-recognition-teachable-machine' || project.type === 'pose-recognition-teachable-machine' || project.type === 'text-recognition' || project.type === 'image-recognition' || project.type === 'custom-ai-agent' ? (
                          <button
