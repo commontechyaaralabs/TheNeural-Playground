@@ -339,7 +339,13 @@ class ChatService:
                         else:
                             logger.info(f"🖼️ No images found for query: '{image_info['query']}'")
                     else:
-                        logger.info(f"🖼️ Image search not enabled or no query provided")
+                        # Provide specific reason why image search is not being used
+                        if not self.image_search.is_enabled:
+                            logger.warning(f"🖼️ Image search is DISABLED - missing GOOGLE_API_KEY or GOOGLE_CSE_ID environment variables")
+                        if not image_info.get("query"):
+                            logger.warning(f"🖼️ Image search query is missing from Gemini response")
+                        if not self.image_search.is_enabled and not image_info.get("query"):
+                            logger.warning(f"🖼️ Image search disabled AND no query provided")
                 else:
                     logger.info(f"🖼️ Gemini determined images are not needed for this response")
             except Exception as img_error:
