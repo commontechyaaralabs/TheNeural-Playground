@@ -65,7 +65,7 @@ Write-Host "[4/6] Deploying to Cloud Run..." -ForegroundColor Blue
 Write-Host "  This may take 2-3 minutes..." -ForegroundColor DarkGray
 
 # Build the command with proper escaping
-$corsOrigins = "https://playground-theneural.vercel.app;https://scratch-editor-uaaur7no2a-uc.a.run.app"
+$corsOrigins = "https://playground-theneural.vercel.app,https://playground.theneural.in,https://scratch-editor-uaaur7no2a-uc.a.run.app"
 $envVars = @(
     "GOOGLE_CLOUD_PROJECT=$PROJECT_ID"
     "ENVIRONMENT=production"
