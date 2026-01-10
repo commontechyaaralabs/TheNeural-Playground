@@ -184,11 +184,9 @@ class ImageRecognitionTrainer:
                 logger.info(f"Successfully opened image: {pil_image.format}, {pil_image.mode}, {pil_image.size}")
             except Exception as img_error:
                 logger.error(f"Failed to open image from bytes: {img_error}")
-                # Try to save the bytes to a file for debugging
-                debug_path = f"debug_image_{int(time.time())}.bin"
-                with open(debug_path, 'wb') as f:
-                    f.write(image_bytes)
-                logger.error(f"Saved problematic image bytes to: {debug_path}")
+                # Log error without creating debug files in production (avoids disk fill)
+                logger.error(f"Cannot identify image file: {img_error}")
+                logger.error(f"Image bytes length: {len(image_bytes)} bytes")
                 raise ValueError(f"Cannot identify image file: {img_error}")
             
             # Convert to RGB if needed
