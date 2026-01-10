@@ -29,6 +29,7 @@ steps:
       - '8Gi'
       - '--cpu'
       - '4'
+      - '--cpu-boost'
       - '--max-instances'
       - '50'
 

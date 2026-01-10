@@ -86,6 +86,7 @@ gcloud run deploy $SERVICE_NAME `
     --set-env-vars=$envVars `
     --memory=4Gi `
     --cpu=1 `
+    --cpu-boost `
     --max-instances=50 `
     --timeout=1500 `
     --port=8080 `

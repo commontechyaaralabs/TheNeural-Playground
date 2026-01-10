@@ -5,6 +5,7 @@ import logging
 import asyncio
 from datetime import datetime, timezone
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 
 from ...models import (
     Project, ProjectCreate, ProjectUpdate, ProjectListResponse, 
@@ -26,6 +27,8 @@ router = APIRouter(prefix="/api/guests", tags=["guests"])
 # Configure logging
 logger = logging.getLogger(__name__)
 
+# Thread pool executor for concurrent training (allows multiple trainings to run simultaneously)
+_training_executor = ThreadPoolExecutor(max_workers=15, thread_name_prefix="training")
 
 # Dependency to get guest service
 def get_guest_service():
@@ -1184,7 +1187,12 @@ async def _train_text_recognition_project(
             if use_distilbert:
                 logger.info("🤖 Using DistilBERT for text classification")
                 try:
-                    training_result = distilbert_trainer.train_model(training_examples)
+                    # Run training in thread pool executor to allow concurrent training
+                    training_result = await asyncio.get_event_loop().run_in_executor(
+                        _training_executor,
+                        distilbert_trainer.train_model,
+                        training_examples
+                    )
                     logger.info(f"DistilBERT training successful: {training_result}")
                     
                     # Save DistilBERT model to GCS (directory structure)
@@ -1233,7 +1241,12 @@ async def _train_text_recognition_project(
             if not use_distilbert:
                 # Fallback to Logistic Regression
                 logger.info("📊 Using Logistic Regression for text classification")
-                training_result = trainer.train_model(training_examples)
+                # Run training in thread pool executor to allow concurrent training
+                training_result = await asyncio.get_event_loop().run_in_executor(
+                    _training_executor,
+                    trainer.train_model,
+                    training_examples
+                )
                 logger.info(f"Logistic Regression training successful: {training_result}")
                 
                 # Save the trained model to GCS
@@ -1340,8 +1353,14 @@ async def _train_image_recognition_project(
         images, labels, class_names = image_trainer.prepare_training_data_direct(image_examples)
         
         try:
-            # Train the model directly
-            training_result = image_trainer.train_model_direct(images, labels, class_names)
+            # Train the model directly - run in thread pool executor to allow concurrent training
+            training_result = await asyncio.get_event_loop().run_in_executor(
+                _training_executor,
+                image_trainer.train_model_direct,
+                images,
+                labels,
+                class_names
+            )
             logger.info(f"Image training successful: {training_result}")
             
             # Save the trained model to GCS in native TensorFlow format
