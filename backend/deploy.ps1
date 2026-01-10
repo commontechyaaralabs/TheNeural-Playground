@@ -84,8 +84,8 @@ gcloud run deploy $SERVICE_NAME `
     --allow-unauthenticated `
     --service-account="svc-backend@${PROJECT_ID}.iam.gserviceaccount.com" `
     --set-env-vars=$envVars `
-    --memory=8Gi `
-    --cpu=4 `
+    --memory=4Gi `
+    --cpu=1 `
     --max-instances=50 `
     --timeout=1500 `
     --port=8080 `

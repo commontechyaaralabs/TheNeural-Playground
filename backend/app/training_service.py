@@ -775,7 +775,7 @@ class DistilBERTTrainer:
             # Training arguments - optimized for small datasets
             training_args = TrainingArguments(
                 output_dir='./distilbert_results',
-                num_train_epochs=10,  # More epochs for small datasets
+                num_train_epochs=6,  # 6 epochs for training
                 per_device_train_batch_size=4,  # Small batch size for small datasets
                 learning_rate=2e-5,
                 weight_decay=0.01,
