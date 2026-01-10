@@ -49,7 +49,7 @@ app = FastAPI(
 origins = [
     "https://playground-theneural.vercel.app",
     "https://playground.theneural.in",
-    "https://scratch-editor-uaaur7no2a-uc.a.run.app",
+    "https://scratch-editor-773717965404.us-central1.run.app",
     "https://playgroundai-backend-uaaur7no2a-uc.a.run.app",
     "http://localhost:3000",
     "http://localhost:8080",

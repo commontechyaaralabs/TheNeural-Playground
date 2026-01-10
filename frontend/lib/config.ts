@@ -5,8 +5,8 @@ export const config = {
   
   // Scratch Editor URLs
   scratchEditor: {
-    gui: process.env.NEXT_PUBLIC_SCRATCH_EDITOR_URL || 'https://scratch-editor-uaaur7no2a-uc.a.run.app',
-    vm: process.env.NEXT_PUBLIC_SCRATCH_VM_URL || 'https://scratch-editor-uaaur7no2a-uc.a.run.app',
+    gui: process.env.NEXT_PUBLIC_SCRATCH_EDITOR_URL || 'https://scratch-editor-773717965404.us-central1.run.app',
+    vm: process.env.NEXT_PUBLIC_SCRATCH_VM_URL || 'https://scratch-editor-773717965404.us-central1.run.app',
   },
   
   // API endpoints

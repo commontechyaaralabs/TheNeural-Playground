@@ -1,7 +1,7 @@
 // Scratch Editor Configuration
 export const SCRATCH_EDITOR_CONFIG = {
   // Production URL (Cloud Run)
-  PRODUCTION_URL: 'https://scratch-editor-uaaur7no2a-uc.a.run.app',
+  PRODUCTION_URL: 'https://scratch-editor-773717965404.us-central1.run.app',
   
   // Development URL (localhost)
   DEVELOPMENT_URL: 'http://localhost:8601',

@@ -190,7 +190,7 @@ gcloud run services update theneural-backend --region us-central1 --max-instance
 service urls:
 Backend URL: https://playgroundai-backend-uaaur7no2a-uc.a.run.app
 Frontend URL: https://playground-theneural.vercel.app/
-Scratch Editor URL: https://scratch-editor-uaaur7no2a-uc.a.run.app
+Scratch Editor URL: https://scratch-editor-773717965404.us-central1.run.app
 
 Next steps:
    1. Update your frontend CORS_ORIGIN to point to: https://playground-theneural.vercel.app
