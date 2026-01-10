@@ -550,6 +550,9 @@ class EnhancedLogisticRegressionTrainer:
     
     def save_model_to_gcs(self, bucket, gcs_path: str, trained_pipeline) -> str:
         """Save trained model directly to GCS with training data"""
+        import time
+        import random
+        
         if trained_pipeline is None:
             raise ValueError("Trained pipeline is required - cannot save untrained models")
         
@@ -564,9 +567,23 @@ class EnhancedLogisticRegressionTrainer:
         # Serialize model data
         model_bytes = pickle.dumps(model_data)
         
-        # Upload to GCS
+        # Upload to GCS with retry logic
         blob = bucket.blob(gcs_path)
-        blob.upload_from_string(model_bytes, content_type='application/octet-stream')
+        max_retries = 5
+        
+        for attempt in range(max_retries):
+            try:
+                blob.upload_from_string(model_bytes, content_type='application/octet-stream', timeout=120)
+                return gcs_path
+            except Exception as upload_err:
+                if attempt < max_retries - 1:
+                    wait_time = (2 ** attempt) + random.random()
+                    logger.warning(f"⚠️ Upload attempt {attempt + 1} failed: {upload_err}")
+                    logger.info(f"   Retrying in {wait_time:.1f} seconds...")
+                    time.sleep(wait_time)
+                else:
+                    logger.error(f"❌ All {max_retries} upload attempts failed for {gcs_path}")
+                    raise upload_err
         
         return gcs_path
 
@@ -651,14 +668,79 @@ class DistilBERTTrainer:
             from torch.utils.data import Dataset
             import torch
             
-            # Load tokenizer and model
+            # Load tokenizer and model with retry logic and HF token support
             logger.info("📥 Loading DistilBERT tokenizer and model...")
             model_name = "distilbert-base-uncased"
-            self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-            self.model = AutoModelForSequenceClassification.from_pretrained(
-                model_name,
-                num_labels=num_labels
-            )
+            
+            # Retry logic for model loading (handles rate limiting)
+            import time
+            import random
+            max_retries = 5
+            
+            def load_tokenizer_with_retry():
+                # First try to load from cache (no download needed - works without token)
+                try:
+                    logger.info("🔍 Trying to load tokenizer from cache...")
+                    tokenizer = AutoTokenizer.from_pretrained(model_name, local_files_only=True)
+                    logger.info("✅ Tokenizer loaded from cache")
+                    return tokenizer
+                except Exception as cache_error:
+                    logger.info(f"📥 Tokenizer not in cache, will download: {str(cache_error)[:50]}...")
+                    # If not cached, download with retry logic
+                    for attempt in range(max_retries):
+                        try:
+                            tokenizer = AutoTokenizer.from_pretrained(
+                                model_name,
+                                local_files_only=False  # Allow download if not cached
+                            )
+                            logger.info("✅ Tokenizer downloaded and loaded")
+                            return tokenizer
+                        except Exception as e:
+                            if attempt < max_retries - 1:
+                                wait_time = (2 ** attempt) + random.random() * 2  # Exponential backoff with jitter
+                                logger.warning(f"⚠️ Tokenizer download attempt {attempt + 1} failed: {str(e)[:100]}...")
+                                logger.info(f"   Retrying in {wait_time:.1f} seconds...")
+                                time.sleep(wait_time)
+                            else:
+                                logger.error(f"❌ All {max_retries} tokenizer download attempts failed")
+                                raise
+            
+            def load_model_with_retry(num_labels):
+                # First try to load from cache (no download needed - works without token)
+                try:
+                    logger.info("🔍 Trying to load model from cache...")
+                    model = AutoModelForSequenceClassification.from_pretrained(
+                        model_name,
+                        num_labels=num_labels,
+                        local_files_only=True  # Use cached model if available
+                    )
+                    logger.info("✅ Model loaded from cache")
+                    return model
+                except Exception as cache_error:
+                    logger.info(f"📥 Model not in cache, will download: {str(cache_error)[:50]}...")
+                    # If not cached, download with retry logic
+                    for attempt in range(max_retries):
+                        try:
+                            model = AutoModelForSequenceClassification.from_pretrained(
+                                model_name,
+                                num_labels=num_labels,
+                                local_files_only=False  # Allow download if not cached
+                            )
+                            logger.info("✅ Model downloaded and loaded")
+                            return model
+                        except Exception as e:
+                            if attempt < max_retries - 1:
+                                wait_time = (2 ** attempt) + random.random() * 2  # Exponential backoff with jitter
+                                logger.warning(f"⚠️ Model download attempt {attempt + 1} failed: {str(e)[:100]}...")
+                                logger.info(f"   Retrying in {wait_time:.1f} seconds...")
+                                time.sleep(wait_time)
+                            else:
+                                logger.error(f"❌ All {max_retries} model download attempts failed")
+                                raise
+            
+            # Load with retry logic
+            self.tokenizer = load_tokenizer_with_retry()
+            self.model = load_model_with_retry(num_labels)
             logger.info("✅ DistilBERT model loaded successfully")
             
             # Create dataset class
@@ -811,13 +893,41 @@ class DistilBERTTrainer:
                 with open(metadata_path, 'w') as f:
                     json.dump(metadata, f, indent=2)
                 
-                # Upload all files directly to GCS cloud storage
+                # Upload all files directly to GCS cloud storage with retry logic
                 logger.info(f"☁️ Uploading all files directly to cloud storage: {gcs_path}")
                 uploaded_files = []
+                
+                def upload_with_retry(blob, file_content, gcs_file_path, max_retries=5):
+                    """Upload file to GCS with exponential backoff retry"""
+                    import time
+                    import random
+                    
+                    for attempt in range(max_retries):
+                        try:
+                            # Set timeout for large files (10 min for model weights)
+                            blob.upload_from_string(
+                                file_content,
+                                timeout=600,  # 10 minute timeout
+                                retry=None  # Disable built-in retry, we handle it ourselves
+                            )
+                            return True
+                        except Exception as upload_err:
+                            if attempt < max_retries - 1:
+                                # Exponential backoff with jitter: 2^attempt + random(0-1)
+                                wait_time = (2 ** attempt) + random.random()
+                                logger.warning(f"⚠️ Upload attempt {attempt + 1} failed for {gcs_file_path}: {upload_err}")
+                                logger.info(f"   Retrying in {wait_time:.1f} seconds...")
+                                time.sleep(wait_time)
+                            else:
+                                logger.error(f"❌ All {max_retries} upload attempts failed for {gcs_file_path}")
+                                raise upload_err
+                    return False
                 
                 for root, dirs, files in os.walk(temp_dir):
                     for file in files:
                         local_path = os.path.join(root, file)
+                        file_size = os.path.getsize(local_path)
+                        
                         # Read file content and upload directly to cloud
                         with open(local_path, 'rb') as f:
                             file_content = f.read()
@@ -827,9 +937,14 @@ class DistilBERTTrainer:
                         # Use forward slashes for GCS
                         gcs_file_path = f"{gcs_path}/{rel_path}".replace('\\', '/')
                         
-                        # Upload directly to cloud storage
+                        # Upload with retry logic
                         blob = bucket.blob(gcs_file_path)
-                        blob.upload_from_string(file_content)
+                        
+                        # Log file size for large files
+                        if file_size > 1024 * 1024:  # > 1MB
+                            logger.info(f"  📦 Uploading large file: {file} ({file_size / (1024*1024):.1f} MB)")
+                        
+                        upload_with_retry(blob, file_content, gcs_file_path)
                         uploaded_files.append(gcs_file_path)
                         logger.info(f"  ☁️ Uploaded to cloud: {gcs_file_path}")
                 

@@ -53,6 +53,8 @@ origins = [
     "https://playgroundai-backend-uaaur7no2a-uc.a.run.app",
     "http://localhost:3000",
     "http://localhost:8080",
+    "http://localhost:8601",  # Scratch Editor GUI
+    "http://localhost:8602",  # Scratch VM
 ]
 
 # Allow dynamic origins from env (comma-separated)

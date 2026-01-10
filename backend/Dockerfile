@@ -31,6 +31,20 @@ RUN pip check || echo "Warning: pip check found issues"
 # Install spaCy English model
 RUN python -m spacy download en_core_web_sm
 
+# Set HuggingFace cache to shared location (accessible by both root and appuser)
+ENV HF_HOME=/app/.cache/huggingface
+
+# Pre-download DistilBERT model to avoid rate limiting at runtime
+# Cached = model files saved on disk, so 100 concurrent requests load from disk (fast) instead of downloading
+RUN mkdir -p /app/.cache/huggingface && \
+    python -c "from transformers import AutoTokenizer, AutoModelForSequenceClassification; \
+    print('📥 Pre-downloading DistilBERT tokenizer...'); \
+    AutoTokenizer.from_pretrained('distilbert-base-uncased'); \
+    print('📥 Pre-downloading DistilBERT model...'); \
+    AutoModelForSequenceClassification.from_pretrained('distilbert-base-uncased', num_labels=2); \
+    print('✅ DistilBERT model cached successfully')" || \
+    echo "⚠️ Warning: Failed to pre-download DistilBERT model (will download at runtime)"
+
 # Copy application code
 COPY . .
 
@@ -38,7 +52,8 @@ COPY . .
 RUN groupadd -g 1001 appgroup && \
     useradd -u 1001 -g appgroup -s /bin/false -m appuser && \
     chown -R appuser:appgroup /app && \
-    chmod -R 755 /app
+    chmod -R 755 /app && \
+    chmod -R 755 /app/.cache
 
 # Switch to non-root user
 USER appuser

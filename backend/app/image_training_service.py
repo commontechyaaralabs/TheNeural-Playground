@@ -558,10 +558,31 @@ class ImageRecognitionTrainer:
                 'trained_at': datetime.now(timezone.utc).isoformat()
             }
             
-            # Save metadata directly to GCS
+            # Helper function for upload with retry
+            def upload_with_retry(blob, data, gcs_file_path, max_retries=5):
+                """Upload to GCS with exponential backoff retry"""
+                import time
+                import random
+                
+                for attempt in range(max_retries):
+                    try:
+                        blob.upload_from_string(data, timeout=300)  # 5 min timeout
+                        return True
+                    except Exception as upload_err:
+                        if attempt < max_retries - 1:
+                            wait_time = (2 ** attempt) + random.random()
+                            logger.warning(f"⚠️ Upload attempt {attempt + 1} failed for {gcs_file_path}: {upload_err}")
+                            logger.info(f"   Retrying in {wait_time:.1f} seconds...")
+                            time.sleep(wait_time)
+                        else:
+                            logger.error(f"❌ All {max_retries} upload attempts failed for {gcs_file_path}")
+                            raise upload_err
+                return False
+            
+            # Save metadata directly to GCS with retry
             metadata_gcs_path = f"{gcs_path}/metadata.json"
             metadata_blob = bucket.blob(metadata_gcs_path)
-            metadata_blob.upload_from_string(json.dumps(metadata, indent=2))
+            upload_with_retry(metadata_blob, json.dumps(metadata, indent=2), metadata_gcs_path)
             logger.info(f"Uploaded metadata to {metadata_gcs_path}")
             
             # Save main model
@@ -578,7 +599,8 @@ class ImageRecognitionTrainer:
                     model_data = f.read()
                 
                 model_blob = bucket.blob(f"{model_gcs_path}.keras")
-                model_blob.upload_from_string(model_data)
+                logger.info(f"📦 Uploading model file ({len(model_data) / (1024*1024):.1f} MB)")
+                upload_with_retry(model_blob, model_data, f"{model_gcs_path}.keras")
                 logger.info(f"Uploaded lightweight model to {model_gcs_path}.keras")
                 
             finally:

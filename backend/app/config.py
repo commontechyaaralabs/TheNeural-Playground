@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     brightdata_api_token: Optional[str] = Field(default=None, env="BRIGHTDATA_API_TOKEN")
     brightdata_dataset_id: str = Field(default="gd_m6gjtfmeh43we6cqc", env="BRIGHTDATA_DATASET_ID")
     
+    # Hugging Face API Token (for DistilBERT model downloads - avoids rate limiting)
+    huggingface_token: Optional[str] = Field(default=None, env="HF_TOKEN")
+    
     class Config:
         env_file = ".env"
 
